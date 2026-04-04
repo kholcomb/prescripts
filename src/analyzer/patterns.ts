@@ -51,6 +51,17 @@ export const PATTERN_REGISTRY: ReadonlyArray<PatternDef> = [
       /(?:\\u00[0-9a-fA-F]{2}){2,}/,
       // Native binding bypass (sandbox escape vector)
       /process\.binding\s*\(/,
+      // event-stream/flatmap-stream (2018): crypto.createDecipher with hardcoded key
+      /crypto\.createDecipher\s*\(/,
+      /crypto\.createDecipheriv\s*\(/,
+      // Axios supply chain (2026): string reversal for payload deobfuscation
+      /\.split\s*\(\s*['"]{2}\s*\).*\.reverse\s*\(\s*\).*\.join\s*\(\s*['"]{2}\s*\)/,
+      // Long inline base64 literals (80+ chars) — encoded payload in script
+      // Short base64 appears in legitimate code; 80+ chars in a lifecycle script
+      // almost always indicates an embedded payload
+      /['"][A-Za-z0-9+/]{80,}={0,2}['"]/,
+      // Anti-forensic infinite loop: for(;;){ ... break} — seen in Axios compromise
+      /for\s*\(\s*;\s*;\s*\)\s*\{/,
     ],
   },
   {

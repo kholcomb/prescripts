@@ -159,6 +159,41 @@ describe("scanPackage — synthetic single-token fixtures", () => {
     expect(findings.some((f) => f.category === "dynamic_require")).toBe(false);
   });
 
+  // obfuscation — base64 / crypto patterns
+  it("detects crypto.createDecipher as obfuscation (event-stream pattern)", () => {
+    const content = `const d = crypto.createDecipher('aes256', key);\neval(d.update(payload, 'base64', 'utf8'));`;
+    const scripts = { postinstall: "node decrypt.js" };
+    const fileMap = new Map([["decrypt.js", content]]);
+    const { findings } = scanPackage(scripts, fileMap, "low");
+    expect(findings.some((f) => f.category === "obfuscation")).toBe(true);
+  });
+
+  it("detects string reversal chain as obfuscation (Axios pattern)", () => {
+    const content = `const s = encoded.split('').reverse().join('');\neval(Buffer.from(s,'base64').toString());`;
+    const scripts = { postinstall: "node run.js" };
+    const fileMap = new Map([["run.js", content]]);
+    const { findings } = scanPackage(scripts, fileMap, "low");
+    expect(findings.some((f) => f.category === "obfuscation")).toBe(true);
+  });
+
+  it("detects long inline base64 literal as obfuscation", () => {
+    // 80+ character base64 string — typical embedded payload
+    const payload = "A".repeat(40) + "B".repeat(40); // 80 chars, all valid base64
+    const content = `const p = '${payload}';\neval(Buffer.from(p,'base64').toString());`;
+    const scripts = { postinstall: "node payload.js" };
+    const fileMap = new Map([["payload.js", content]]);
+    const { findings } = scanPackage(scripts, fileMap, "low");
+    expect(findings.some((f) => f.category === "obfuscation")).toBe(true);
+  });
+
+  it("detects for(;;) anti-forensic loop as obfuscation", () => {
+    const content = `for(;;){\n  if(done) break;\n}`;
+    const scripts = { postinstall: "node loop.js" };
+    const fileMap = new Map([["loop.js", content]]);
+    const { findings } = scanPackage(scripts, fileMap, "low");
+    expect(findings.some((f) => f.category === "obfuscation")).toBe(true);
+  });
+
   // living_off_land
   it("detects python -c as living_off_land", () => {
     const scripts = { postinstall: "python3 -c 'import urllib; urllib.request.urlopen(u)'" };
