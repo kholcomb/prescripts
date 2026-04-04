@@ -22,6 +22,7 @@ function makeReport(name: string, hasFindings: boolean): PackageReport {
     },
     lifecycleScripts: { postinstall: "node setup.js" },
     binaryDownload: null,
+    advisories: [],
     findings: hasFindings
       ? [
           {

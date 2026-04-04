@@ -61,6 +61,16 @@ export interface BinaryField {
   module_name: string | null;
 }
 
+export interface AdvisoryMatch {
+  id: number;
+  title: string;
+  severity: Severity;
+  url: string;
+  vulnerableVersions: string;
+  cves: string[];
+  cvssScore: number | null;
+}
+
 export interface PackageReport {
   name: string;
   version: string;
@@ -68,6 +78,7 @@ export interface PackageReport {
   provenance: ProvenanceInfo;
   lifecycleScripts: LifecycleScripts;
   binaryDownload: BinaryField | null;
+  advisories: AdvisoryMatch[];
   findings: Finding[];
 }
 

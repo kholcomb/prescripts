@@ -14,7 +14,8 @@ import {
   setTimeout_ as setRequestTimeout,
 } from "./registry/client.js";
 import { setRegistryConcurrency } from "./registry/rate-limiter.js";
-import type { PackageReport, PackageRef, ScanOptions, Severity, Finding } from "./types.js";
+import { fetchAdvisories } from "./registry/advisory.js";
+import type { PackageReport, PackageRef, ScanOptions, Severity, Finding, AdvisoryMatch } from "./types.js";
 import { writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
@@ -22,7 +23,8 @@ async function scanRef(
   ref: PackageRef,
   opts: ScanOptions,
   cache: DiskCache,
-  projectDir: string
+  projectDir: string,
+  advisoryMap: Map<string, AdvisoryMatch[]> = new Map()
 ): Promise<PackageReport | null> {
   // Check hosted API first if configured
   if (opts.apiUrl) {
@@ -67,8 +69,9 @@ async function scanRef(
 
   const lifecycleScripts = extractLifecycleScripts(packageJson);
   const binaryDownload = extractBinaryField(packageJson);
+  const advisories = advisoryMap.get(ref.name) ?? [];
 
-  if (!hasLifecycleScripts(lifecycleScripts) && !binaryDownload) {
+  if (!hasLifecycleScripts(lifecycleScripts) && !binaryDownload && advisories.length === 0) {
     return null; // nothing to report
   }
 
@@ -103,6 +106,7 @@ async function scanRef(
     provenance,
     lifecycleScripts,
     binaryDownload,
+    advisories,
     findings,
   };
 }
@@ -122,7 +126,8 @@ export async function scanSinglePackage(
   const meta = await fetchVersionMeta(name, version);
   ref.resolved = meta.tarballUrl;
   ref.integrity = meta.integrity;
-  return scanRef(ref, opts, cache, process.cwd());
+  const advisoryMap = await fetchAdvisories([ref], opts.registry);
+  return scanRef(ref, opts, cache, process.cwd(), advisoryMap);
 }
 
 export async function runScan(dir: string, opts: ScanOptions): Promise<number> {
@@ -134,6 +139,9 @@ export async function runScan(dir: string, opts: ScanOptions): Promise<number> {
   const cache = new DiskCache(opts.cacheDir);
   const refs = await parseLockfile(projectDir);
 
+  // Batch advisory lookup — one request for all packages before the scan loop
+  const advisoryMap = await fetchAdvisories(refs, opts.registry);
+
   const limit = pLimit(opts.concurrency);
   let completed = 0;
   const total = refs.length;
@@ -144,7 +152,7 @@ export async function runScan(dir: string, opts: ScanOptions): Promise<number> {
     refs.map((ref) =>
       limit(async () => {
         try {
-          const report = await scanRef(ref, opts, cache, projectDir);
+          const report = await scanRef(ref, opts, cache, projectDir, advisoryMap);
           if (report) reports.push(report);
         } catch (err) {
           if (opts.verbose) {
@@ -185,6 +193,8 @@ export async function runCheck(
   const cache = new DiskCache(opts.cacheDir);
   const refs = await resolveTree(resolvedName, resolvedVersion, opts.depth);
 
+  const advisoryMap = await fetchAdvisories(refs, opts.registry);
+
   const limit = pLimit(opts.concurrency);
   let completed = 0;
   const total = refs.length;
@@ -194,7 +204,7 @@ export async function runCheck(
     refs.map((ref) =>
       limit(async () => {
         try {
-          const report = await scanRef(ref, opts, cache, process.cwd());
+          const report = await scanRef(ref, opts, cache, process.cwd(), advisoryMap);
           if (report) reports.push(report);
         } catch (err) {
           if (opts.verbose) {

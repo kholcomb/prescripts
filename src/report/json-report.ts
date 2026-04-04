@@ -5,7 +5,9 @@ export function buildProjectReport(
   mode: "scan" | "check",
   onlyFlagged: boolean
 ): ProjectReport {
-  const flagged = packages.filter((p) => p.findings.length > 0);
+  const flagged = packages.filter(
+    (p) => p.findings.length > 0 || p.advisories.length > 0
+  );
   const output = onlyFlagged ? flagged : packages;
 
   return {

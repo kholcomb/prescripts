@@ -1,4 +1,4 @@
-import type { PackageReport, ProjectReport, Finding, Severity } from "../types.js";
+import type { PackageReport, ProjectReport, Finding, AdvisoryMatch, Severity } from "../types.js";
 
 const RESET = "\x1b[0m";
 const BOLD = "\x1b[1m";
@@ -40,6 +40,17 @@ function renderFinding(finding: Finding): string {
   }
   lines.push(`  └${border}┘`);
 
+  return lines.join("\n");
+}
+
+function renderAdvisory(advisory: AdvisoryMatch): string {
+  const lines: string[] = [];
+  const sevLabel = c(severityColor(advisory.severity), `[advisory/${advisory.severity}]`);
+  const cveList = advisory.cves.length > 0 ? `  ${c(DIM, advisory.cves.join(", "))}` : "";
+  const cvss = advisory.cvssScore !== null ? c(DIM, ` CVSS ${advisory.cvssScore.toFixed(1)}`) : "";
+  lines.push(`  ${sevLabel} ${c(BOLD, advisory.title)}${cvss}`);
+  lines.push(`  Affects: ${c(DIM, advisory.vulnerableVersions)}${cveList}`);
+  lines.push(`  ${c(CYAN, advisory.url)}`);
   return lines.join("\n");
 }
 
@@ -85,7 +96,11 @@ function renderPackage(pkg: PackageReport): string {
     );
   }
 
-  if (pkg.findings.length === 0) {
+  for (const advisory of pkg.advisories) {
+    lines.push(renderAdvisory(advisory));
+  }
+
+  if (pkg.findings.length === 0 && pkg.advisories.length === 0) {
     lines.push(c(GREEN, "  ✓ No findings"));
   } else {
     for (const finding of pkg.findings) {
@@ -100,7 +115,7 @@ export function renderReport(report: ProjectReport, onlyFlagged: boolean): void 
   const out = process.stdout;
 
   for (const pkg of report.packages) {
-    if (onlyFlagged && pkg.findings.length === 0) continue;
+    if (onlyFlagged && pkg.findings.length === 0 && pkg.advisories.length === 0) continue;
     out.write(renderPackage(pkg) + "\n");
   }
 
