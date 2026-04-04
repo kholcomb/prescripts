@@ -101,6 +101,12 @@ export const PATTERN_REGISTRY: ReadonlyArray<PatternDef> = [
       /\bid_ed25519\b/,
       /authorized_keys/,
       /\.npmrc/,
+      /~\/\.ssh\//,              // SSH key directory
+      /~\/\.docker\/config/,     // Docker registry tokens
+      /~\/\.kube\/config\b/,     // Kubernetes credentials
+      /~\/\.config\/gh\//,       // GitHub CLI credentials
+      /\.yarnrc\b/,              // Yarn tokens
+      /~\/\.netrc\b/,            // curl/ftp credentials
     ],
   },
   {
@@ -126,9 +132,26 @@ export const PATTERN_REGISTRY: ReadonlyArray<PatternDef> = [
     severity: "medium",
     description: "Reads sensitive environment variables",
     patterns: [
+      // AWS credentials
       /\bAWS_[A-Z_]+\b/,
+      // SCM tokens
       /\bGITHUB_TOKEN\b/,
+      /\bGITLAB_TOKEN\b/,
+      /\bCI_JOB_TOKEN\b/,        // GitLab CI internal token
+      // Package registry tokens
       /\bNPM_TOKEN\b/,
+      /\bNODE_AUTH_TOKEN\b/,     // GitHub Actions npm publish token
+      // CI/CD platform tokens — high-value targets; specific enough for medium→co-occur→critical
+      /\bACTIONS_RUNTIME_TOKEN\b/,
+      /\bACTIONS_CACHE_URL\b/,
+      /\bCIRCLE_TOKEN\b/,
+      /\bTRAVIS_[A-Z_]+\b/,
+      // Cloud platform credentials
+      /\bDOCKER_PASSWORD\b/,
+      /\bHEROKU_API_KEY\b/,
+      /\bVERCEL_TOKEN\b/,
+      /\bNETLIFY_AUTH_TOKEN\b/,
+      // SSH agent socket
       /\bSSH_AUTH_SOCK\b/,
     ],
   },
@@ -179,6 +202,79 @@ export const PATTERN_REGISTRY: ReadonlyArray<PatternDef> = [
       /\bdns\.resolve\s*\(/,
       /\bdns\.reverse\s*\(/,
       /require\s*\(\s*['"]dns['"]\s*\)/,
+    ],
+  },
+  {
+    // high not critical: python -c is occasionally used by legitimate build scripts
+    // (e.g. gyp-based tools calling python). Weight against provenance.
+    category: "living_off_land",
+    severity: "high",
+    description:
+      "Invokes an alternative interpreter — execution via python/perl/ruby/php",
+    patterns: [
+      /\bpython\d*\s+.*-[^\s]*c\b/,  // python -c "code"
+      /\bperl\s+-[^\s]*e\b/,          // perl -e "code"
+      /\bruby\s+-[^\s]*e\b/,          // ruby -e "code"
+      /\bphp\s+-r\b/,                 // php -r "code"
+    ],
+  },
+  {
+    // critical: xmrig/minerd in an install script has no legitimate use.
+    // stratum+tcp is the mining pool protocol — zero ambiguity.
+    category: "cryptomining",
+    severity: "critical",
+    description: "Cryptocurrency miner binary or pool protocol reference",
+    patterns: [
+      /\bxmrig\b/i,
+      /\bminerd\b/i,
+      /\bcpuminer\b/i,
+      /stratum\+tcp:\/\//,            // mining pool URI scheme
+      /\bcryptonight\b/i,             // algorithm name used in pool configs
+    ],
+  },
+  {
+    // high: these are specific webhook URLs with no benign install-time use.
+    // medium would under-represent the exfil risk; critical is reserved for
+    // confirmed data-leaving patterns (env_exfil, integrity_mismatch).
+    category: "webhook_exfil",
+    severity: "high",
+    description:
+      "Posts to a known-platform webhook — common low-noise exfiltration channel",
+    patterns: [
+      /discord\.com\/api\/webhooks\//,
+      /hooks\.slack\.com\//,
+      /api\.telegram\.org\/bot[^/]+\//,  // Telegram bot API with token in path
+      /notify\.run\//,                   // notify.run push service
+    ],
+  },
+  {
+    // medium: container/sandbox detection is a precursor behaviour, not directly
+    // harmful — a package checking "am I in Docker" might be doing install-path
+    // selection. Elevates when combined with network (co-occurrence) or obfuscation.
+    category: "sandbox_evasion",
+    severity: "medium",
+    description:
+      "Probes for container or sandbox indicators — may suppress payload in analysis environments",
+    patterns: [
+      /\/\.dockerenv\b/,
+      /\/proc\/1\/cgroup\b/,
+      /\/proc\/self\/status\b/,
+      /\bos\.hostname\s*\(\s*\)/,     // hostname fingerprinting
+    ],
+  },
+  {
+    // critical: /proc/self/environ dumps the entire process environment including
+    // all secrets. /etc/shadow contains password hashes. Neither has a legitimate
+    // reason to appear in a package install script.
+    category: "system_recon",
+    severity: "critical",
+    description:
+      "Reads privileged system files that expose credentials or full environment state",
+    patterns: [
+      /\/proc\/self\/environ\b/,      // complete environment variable dump
+      /\/etc\/shadow\b/,              // password hash file
+      /\/proc\/net\/tcp\b/,           // active network connection table
+      /\/proc\/self\/maps\b/,         // memory layout (ASLR bypass aid)
     ],
   },
   {
