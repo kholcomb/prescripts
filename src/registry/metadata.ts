@@ -1,4 +1,5 @@
 import { fetchFullMeta, fetchDownloads } from "./client.js";
+import { fetchAttestation } from "./attestation.js";
 import type { ProvenanceInfo } from "../types.js";
 
 interface VersionScripts {
@@ -38,6 +39,7 @@ export async function fetchProvenance(
       installScriptIsNew: null,
       totalVersions: null,
       unavailableReason: "Private registry — provenance metadata unavailable",
+      attestation: null,
     };
   }
 
@@ -74,6 +76,14 @@ export async function fetchProvenance(
       installScriptIsNew = currentHasScript;
     }
 
+    // Sigstore provenance attestation — best-effort, runs concurrently
+    const attestationsUrl =
+      (meta.versions[version] as { dist?: { attestations?: { url?: string } } } | undefined)
+        ?.dist?.attestations?.url ?? null;
+    const attestation = attestationsUrl
+      ? await fetchAttestation(attestationsUrl)
+      : null;
+
     return {
       publishedAt,
       weeklyDownloads: downloads,
@@ -81,6 +91,7 @@ export async function fetchProvenance(
       installScriptIsNew,
       totalVersions,
       unavailableReason: null,
+      attestation,
     };
   } catch (err) {
     return {
@@ -90,6 +101,7 @@ export async function fetchProvenance(
       installScriptIsNew: null,
       totalVersions: null,
       unavailableReason: `Failed to fetch provenance: ${String(err)}`,
+      attestation: null,
     };
   }
 }

@@ -20,6 +20,7 @@ const DEFAULT_OPTS: ScanOptions = {
   timeout: 30_000,
   verbose: false,
   json: true,
+  sarif: false,
   output: null,
   apiUrl: null,
 };

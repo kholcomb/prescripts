@@ -9,6 +9,7 @@ import { DiskCache } from "./cache/disk-cache.js";
 import { resolveTree } from "./resolver/package-tree.js";
 import { buildProjectReport, toJson } from "./report/json-report.js";
 import { renderReport, renderProgress, clearProgress } from "./report/human.js";
+import { toSarif } from "./report/sarif.js";
 import {
   setRegistry,
   setTimeout_ as setRequestTimeout,
@@ -239,9 +240,14 @@ async function writeOutput(
     return;
   }
 
+  const sarifOutput = opts.sarif ? toSarif(report) : null;
+  const content = sarifOutput ?? json;
+
   if (opts.output) {
-    await writeFile(opts.output, json, "utf-8");
+    await writeFile(opts.output, content, "utf-8");
     process.stderr.write(`Report written to ${opts.output}\n`);
+  } else if (opts.sarif) {
+    process.stdout.write(content + "\n");
   } else if (opts.json) {
     process.stdout.write(json + "\n");
   } else {
@@ -260,6 +266,7 @@ interface CliScanOptions {
   timeout: string;
   verbose: boolean;
   json: boolean;
+  sarif: boolean;
   output?: string;
   apiUrl?: string;
 }
@@ -276,6 +283,7 @@ function parseOpts(raw: CliScanOptions): ScanOptions {
     timeout: parseInt(raw.timeout, 10),
     verbose: raw.verbose,
     json: raw.json,
+    sarif: raw.sarif,
     output: raw.output ?? null,
     apiUrl: raw.apiUrl ?? null,
   };
@@ -295,7 +303,8 @@ export function buildProgram(): Command {
   const sharedOptions = (cmd: Command): Command =>
     cmd
       .option("-j, --json", "Output JSON report to stdout", false)
-      .option("-o, --output <file>", "Write JSON report to file")
+      .option("--sarif", "Output SARIF 2.1.0 report (for GitHub Actions upload-sarif)", false)
+      .option("-o, --output <file>", "Write report to file (format determined by --json/--sarif)")
       .option(
         "--severity <level>",
         "Minimum severity: low|medium|high|critical",

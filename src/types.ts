@@ -21,6 +21,12 @@ export interface SourceInfo {
   integrityVerified: boolean;
 }
 
+export interface AttestationInfo {
+  sourceRepo: string | null;    // e.g. "github.com/expressjs/express"
+  buildWorkflow: string | null; // e.g. ".github/workflows/release.yml"
+  predicateType: string | null; // SLSA predicate URI
+}
+
 export interface ProvenanceInfo {
   publishedAt: string | null;
   weeklyDownloads: number | null;
@@ -28,6 +34,8 @@ export interface ProvenanceInfo {
   installScriptIsNew: boolean | null;
   totalVersions: number | null;
   unavailableReason: string | null;
+  /** Sigstore provenance attestation. null = no attestation found. */
+  attestation: AttestationInfo | null;
 }
 
 export interface LifecycleScripts {
@@ -114,6 +122,7 @@ export interface ScanOptions {
   timeout: number;
   verbose: boolean;
   json: boolean;
+  sarif: boolean;
   output: string | null;
   apiUrl: string | null;
 }

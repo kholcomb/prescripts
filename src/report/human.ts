@@ -79,9 +79,16 @@ function renderPackage(pkg: PackageReport): string {
     ? c(DIM, `[no provenance: ${provenance.unavailableReason}]`) + " "
     : "";
 
+  const attestationBadge = provenance.attestation
+    ? c(GREEN, `[provenance: ${provenance.attestation.sourceRepo ?? "verified"}]`) + " "
+    : provenance.unavailableReason
+    ? ""
+    : c(DIM, "[no provenance attestation]") + " ";
+
   lines.push(
     `\n${c(BOLD, `${pkg.name}@${pkg.version}`)}  ` +
-    srcBadge + integrityBadge + newScript + maintainers + downloads + noProvenance
+    srcBadge + integrityBadge + newScript + maintainers + downloads +
+    noProvenance + attestationBadge
   );
 
   for (const [hook, script] of Object.entries(pkg.lifecycleScripts)) {

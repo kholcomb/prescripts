@@ -105,7 +105,13 @@ export async function fetchTarball(url: string): Promise<Buffer> {
 export interface FullPackageMeta {
   versions: Record<
     string,
-    { dist?: { tarball?: string; integrity?: string } }
+    {
+      dist?: {
+        tarball?: string;
+        integrity?: string;
+        attestations?: { url?: string };
+      };
+    }
   >;
   time?: Record<string, string>;
   "dist-tags"?: Record<string, string>;
