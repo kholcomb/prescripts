@@ -45,6 +45,12 @@ export const PATTERN_REGISTRY: ReadonlyArray<PatternDef> = [
       /Buffer\.from\s*\([^)]*['"]\s*hex\s*['"]/,
       /String\.fromCharCode\s*\(/,
       /\batob\s*\(/,
+      // 3+ consecutive hex escapes — typical obfuscated string payload
+      /(?:\\x[0-9a-fA-F]{2}){3,}/,
+      // 2+ consecutive unicode escapes in the low-codepoint range
+      /(?:\\u00[0-9a-fA-F]{2}){2,}/,
+      // Native binding bypass (sandbox escape vector)
+      /process\.binding\s*\(/,
     ],
   },
   {
@@ -54,8 +60,12 @@ export const PATTERN_REGISTRY: ReadonlyArray<PatternDef> = [
     patterns: [
       /\bchild_process\b/,
       /\bexecSync\s*\(/,
+      /\bspawnSync\s*\(/,
       /\bspawn\s*\(/,
-      /[^a-zA-Z]exec\s*\(/,
+      // Negative lookbehind: exclude .exec( (RegExp/Promise method) and word-char prefix
+      /(?<![.\w])exec\s*\(/,
+      // Make executable then run — common in postinstall downloaders
+      /chmod\s+[+\d]*x\b/,
     ],
   },
   {
@@ -127,8 +137,9 @@ export const PATTERN_REGISTRY: ReadonlyArray<PatternDef> = [
     severity: "medium",
     description: "Dynamic require or import with non-literal argument",
     patterns: [
-      /require\s*\(\s*[^'"`)]/,
-      /import\s*\(\s*[^'"`)]/,
+      // Exclude common benign patterns: path.join/__dirname/__filename/require.resolve
+      /require\s*\(\s*(?!path\.|__dirname|__filename|require\.resolve)[^'"`)]/,
+      /import\s*\(\s*(?!path\.|__dirname|__filename)[^'"`)]/,
     ],
   },
   {
@@ -154,7 +165,28 @@ export const PATTERN_REGISTRY: ReadonlyArray<PatternDef> = [
     category: "env_check",
     severity: "low",
     description: "Reads process environment (broad signal — weigh with provenance)",
-    patterns: [/process\.env\b/],
+    patterns: [
+      // Exclude the most common benign vars: NODE_ENV, CI flags, PATH, shell basics
+      /process\.env(?!\.(NODE_ENV|CI|TERM|LANG|PATH|HOME|USER|PWD|SHELL|npm_)\b)\b/,
+    ],
+  },
+  {
+    category: "dns_exfil",
+    severity: "medium",
+    description: "DNS lookup at install time — common exfiltration channel",
+    patterns: [
+      /\bdns\.lookup\s*\(/,
+      /\bdns\.resolve\s*\(/,
+      /\bdns\.reverse\s*\(/,
+      /require\s*\(\s*['"]dns['"]\s*\)/,
+    ],
+  },
+  {
+    category: "env_exfil",
+    severity: "critical",
+    description:
+      "Env probe co-occurs with network call — credential exfiltration pattern",
+    patterns: [], // emitted programmatically by co-occurrence detection in scanner.ts
   },
   {
     category: "integrity_mismatch",

