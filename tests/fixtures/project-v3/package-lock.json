@@ -1,0 +1,36 @@
+{
+  "name": "test-project",
+  "version": "1.0.0",
+  "lockfileVersion": 3,
+  "requires": true,
+  "packages": {
+    "": {
+      "name": "test-project",
+      "version": "1.0.0"
+    },
+    "node_modules/clean-pkg": {
+      "version": "1.0.0",
+      "resolved": "https://registry.npmjs.org/clean-pkg/-/clean-pkg-1.0.0.tgz",
+      "integrity": "sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+    },
+    "node_modules/pkg-with-script": {
+      "version": "2.1.0",
+      "resolved": "https://registry.npmjs.org/pkg-with-script/-/pkg-with-script-2.1.0.tgz",
+      "integrity": "sha512-BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=="
+    },
+    "node_modules/git-dep": {
+      "version": "0.1.0",
+      "resolved": "git+https://github.com/example/git-dep.git#abc1234",
+      "integrity": null
+    },
+    "node_modules/local-dep": {
+      "version": "0.0.1",
+      "resolved": "file:../local-dep"
+    },
+    "node_modules/@scope/scoped-pkg": {
+      "version": "3.0.0",
+      "resolved": "https://registry.npmjs.org/@scope/scoped-pkg/-/@scope/scoped-pkg-3.0.0.tgz",
+      "integrity": "sha512-CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC=="
+    }
+  }
+}

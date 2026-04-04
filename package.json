@@ -1,0 +1,49 @@
+{
+  "name": "npm-prescripts",
+  "version": "0.1.0",
+  "description": "Static lifecycle script scanner for npm dependencies — triage tool for humans and LLM agents",
+  "type": "module",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "bin": {
+    "npm-prescripts": "./dist/src/index.js"
+  },
+  "main": "./dist/src/index.js",
+  "exports": {
+    ".": "./dist/src/index.js",
+    "./mcp": "./dist/mcp.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/index.ts",
+    "dev:mcp": "tsx mcp.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "commander": "^12.0.0",
+    "p-limit": "^6.0.0",
+    "p-retry": "^6.0.0",
+    "simple-git": "^3.0.0",
+    "tar": "^7.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/tar": "^6.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.4.0",
+    "vitest": "^1.0.0"
+  },
+  "keywords": [
+    "npm",
+    "security",
+    "supply-chain",
+    "lifecycle-scripts",
+    "static-analysis",
+    "mcp"
+  ],
+  "license": "MIT"
+}
