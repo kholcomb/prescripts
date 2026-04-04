@@ -12,7 +12,8 @@ export const PATTERN_REGISTRY: ReadonlyArray<PatternDef> = [
     category: "pipe_exec",
     severity: "critical",
     description: "Pipes output directly into a shell interpreter",
-    patterns: [/\|\s*bash\b/, /\|\s*sh\b/, /\|\s*node\b/],
+    // Use negative lookbehind to exclude || (logical OR) — only match single pipes
+    patterns: [/(?<!\|)\|\s*bash\b/, /(?<!\|)\|\s*sh\b/, /(?<!\|)\|\s*node\b/],
   },
   {
     category: "reverse_shell",

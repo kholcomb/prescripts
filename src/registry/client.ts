@@ -109,6 +109,7 @@ export interface FullPackageMeta {
   >;
   time?: Record<string, string>;
   "dist-tags"?: Record<string, string>;
+  maintainers?: Array<{ name: string; email?: string }>;
 }
 
 export async function fetchFullMeta(name: string): Promise<FullPackageMeta> {
@@ -131,7 +132,10 @@ export async function fetchDownloads(
   name: string
 ): Promise<number | null> {
   try {
-    const encoded = encodeURIComponent(name);
+    // Scoped packages must use @scope%2Fpkg encoding for the downloads API
+    const encoded = name.startsWith("@")
+      ? `@${encodeURIComponent(name.slice(1))}`
+      : encodeURIComponent(name);
     const res = await fetchWithTimeout(
       `https://api.npmjs.org/downloads/point/last-week/${encoded}`
     );

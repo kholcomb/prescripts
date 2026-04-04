@@ -49,7 +49,7 @@ export async function fetchProvenance(
 
     const publishedAt = meta.time?.[version] ?? null;
     const totalVersions = Object.keys(meta.versions).length;
-    const maintainerCount = null; // maintainers field not available per-version in full meta
+    const maintainerCount = meta.maintainers?.length ?? null;
 
     // Determine if install script is new to this version
     const versionList = Object.keys(meta.versions);
