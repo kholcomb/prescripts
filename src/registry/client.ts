@@ -106,10 +106,15 @@ export interface FullPackageMeta {
   versions: Record<
     string,
     {
+      scripts?: Record<string, string>;
+      deprecated?: string;
+      _npmUser?: { name: string; email?: string };
       dist?: {
         tarball?: string;
         integrity?: string;
         attestations?: { url?: string };
+        /** ECDSA registry signatures — present on packages published after npm added signing */
+        signatures?: Array<{ keyid: string; sig: string }>;
       };
     }
   >;

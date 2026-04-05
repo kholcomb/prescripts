@@ -85,9 +85,28 @@ function renderPackage(pkg: PackageReport): string {
     ? ""
     : c(DIM, "[no provenance attestation]") + " ";
 
+  const deprecatedBadge = provenance.deprecated
+    ? c(RED + BOLD, `[DEPRECATED: ${provenance.deprecated}]`) + " "
+    : "";
+
+  const sigBadge =
+    provenance.hasRegistrySignature === false
+      ? c(YELLOW, "[unsigned]") + " "
+      : provenance.hasRegistrySignature === true
+      ? c(DIM, "[signed]") + " "
+      : "";
+
+  const publisherBadge =
+    provenance.publisher && provenance.publisherInMaintainers === false
+      ? c(YELLOW, `[publisher not in maintainers: ${provenance.publisher}]`) + " "
+      : provenance.publisher
+      ? c(DIM, `[publisher: ${provenance.publisher}]`) + " "
+      : "";
+
   lines.push(
     `\n${c(BOLD, `${pkg.name}@${pkg.version}`)}  ` +
-    srcBadge + integrityBadge + newScript + maintainers + downloads +
+    srcBadge + integrityBadge + deprecatedBadge + newScript +
+    maintainers + downloads + sigBadge + publisherBadge +
     noProvenance + attestationBadge
   );
 

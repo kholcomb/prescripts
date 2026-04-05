@@ -16,7 +16,7 @@ import {
 } from "./registry/client.js";
 import { setRegistryConcurrency } from "./registry/rate-limiter.js";
 import { fetchAdvisories } from "./registry/advisory.js";
-import type { PackageReport, PackageRef, ScanOptions, Severity, Finding, AdvisoryMatch } from "./types.js";
+import type { PackageReport, PackageRef, ScanOptions, Severity, Finding, AdvisoryMatch, LifecycleScripts } from "./types.js";
 import { writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
@@ -76,11 +76,56 @@ async function scanRef(
     return null; // nothing to report
   }
 
-  const provenance = await fetchProvenance(ref.name, ref.version, opts.registry);
+  const { provenance, registryManifestScripts } = await fetchProvenance(
+    ref.name,
+    ref.version,
+    opts.registry
+  );
   const { findings: patternFindings } = scanPackage(lifecycleScripts, fileMap, opts.severity);
 
-  // Add integrity mismatch as a finding if applicable
   const findings: Finding[] = [...patternFindings];
+
+  // --- Manifest confusion: tarball scripts vs. registry manifest scripts ---
+  if (registryManifestScripts !== null || hasLifecycleScripts(lifecycleScripts)) {
+    for (const hook of Object.keys(lifecycleScripts) as (keyof LifecycleScripts)[]) {
+      const tarballValue = lifecycleScripts[hook];
+      const registryValue = (registryManifestScripts as Record<string, string> | null)?.[hook];
+      if (tarballValue !== registryValue) {
+        findings.unshift({
+          scriptHook: hook,
+          source: "manifest confusion: tarball vs. registry manifest",
+          category: "manifest_confusion",
+          severity: "critical",
+          pattern: registryValue === undefined
+            ? "script present in tarball but absent from registry manifest"
+            : "script value differs between tarball and registry manifest",
+          excerpt: {
+            _warning: "UNTRUSTED THIRD-PARTY CONTENT",
+            lines: `registry: ${registryValue ?? "(not present)"}\ntarball:  ${tarballValue}`,
+          },
+        });
+      }
+    }
+  }
+
+  // --- Provenance regression ---
+  if (provenance.attestationRegressed === true) {
+    findings.push({
+      scriptHook: null,
+      source: "provenance attestation",
+      category: "provenance_regression",
+      severity: "high",
+      pattern: "attestation absent (present in previous version)",
+      excerpt: {
+        _warning: "UNTRUSTED THIRD-PARTY CONTENT",
+        lines:
+          "Previous version had Sigstore provenance attestation.\n" +
+          "This version does not — consistent with the Axios supply chain attack pattern (2026).",
+      },
+    });
+  }
+
+  // --- Integrity mismatch ---
   if (ref.integrity && !integrityVerified) {
     findings.unshift({
       scriptHook: null,

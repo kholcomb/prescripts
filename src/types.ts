@@ -36,6 +36,28 @@ export interface ProvenanceInfo {
   unavailableReason: string | null;
   /** Sigstore provenance attestation. null = no attestation found. */
   attestation: AttestationInfo | null;
+  /** Deprecation message if this version is deprecated, null otherwise. */
+  deprecated: string | null;
+  /** npm username that published this specific version. */
+  publisher: string | null;
+  /** Whether the publisher is in the current maintainers list.
+   *  false can be normal (ex-maintainer); flag when combined with other signals. */
+  publisherInMaintainers: boolean | null;
+  /** Whether dist.signatures (ECDSA registry signing) is present. */
+  hasRegistrySignature: boolean | null;
+  /** True if the previous version had a Sigstore attestation but this one does not.
+   *  The exact signal that would have caught the Axios supply chain attack. */
+  attestationRegressed: boolean | null;
+}
+
+/** Returned by fetchProvenance — includes registry manifest scripts for
+ *  manifest confusion detection in the caller. */
+export interface ProvenanceFetchResult {
+  provenance: ProvenanceInfo;
+  /** Lifecycle scripts from the registry manifest (not the tarball).
+   *  Used to detect manifest confusion: tarball scripts differ from what
+   *  the registry shows as the authoritative package.json. */
+  registryManifestScripts: LifecycleScripts | null;
 }
 
 export interface LifecycleScripts {

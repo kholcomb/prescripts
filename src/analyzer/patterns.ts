@@ -296,6 +296,26 @@ export const PATTERN_REGISTRY: ReadonlyArray<PatternDef> = [
     patterns: [], // emitted programmatically by co-occurrence detection in scanner.ts
   },
   {
+    // critical: the tarball the user installs has different lifecycle scripts
+    // than what the registry manifest advertises. Tools that only read the
+    // registry manifest (most of them) will not see the malicious scripts.
+    category: "manifest_confusion",
+    severity: "critical",
+    description:
+      "Tarball lifecycle scripts differ from registry manifest — hidden or modified install scripts",
+    patterns: [], // emitted programmatically in cli.ts after tarball extraction
+  },
+  {
+    // high: provenance attestation was present in the previous version but is
+    // absent in this one. This is the exact signal that would have caught the
+    // malicious axios@1.14.1 release.
+    category: "provenance_regression",
+    severity: "high",
+    description:
+      "Previous version had Sigstore provenance attestation; this version does not",
+    patterns: [], // emitted programmatically in cli.ts
+  },
+  {
     category: "integrity_mismatch",
     severity: "critical",
     description: "Downloaded content does not match expected integrity hash",
