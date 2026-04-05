@@ -13,7 +13,8 @@
 
 import { createHash } from "node:crypto";
 import { mkdtemp, writeFile, readFile, readdir, mkdir } from "node:fs/promises";
-import { join, extname } from "node:path";
+import type { Stats } from "node:fs";
+import { join, extname, resolve, sep, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { stat } from "node:fs/promises";
 import * as tar from "tar";
@@ -22,8 +23,27 @@ import type { ExtractedPackage } from "../types.js";
 const PYTHON_ALLOWED_EXTENSIONS = new Set([".py", ".pth", ".cfg", ".toml"]);
 const MAX_FILE_SIZE = 100 * 1024;
 
-function isSafeEntry(entryPath: string): boolean {
-  return !entryPath.includes("..") && !entryPath.startsWith("/");
+// Only allow regular files and directories — reject symlinks, hard links, devices, FIFOs.
+const SAFE_TAR_TYPES = new Set(["File", "OldFile", "ContiguousFile", "Directory"]);
+
+/**
+ * Returns a tar filter that rejects:
+ *  - non-regular-file/directory entry types (symlinks, hard links, devices)
+ *  - absolute paths
+ *  - paths containing ".." traversal sequences
+ *  - paths whose resolved destination escapes extractDir (zip-slip defence)
+ */
+function makeTarFilter(extractDir: string): (path: string, entry: tar.ReadEntry | Stats) => boolean {
+  const resolvedRoot = resolve(extractDir);
+  return (entryPath: string, entry: tar.ReadEntry | Stats): boolean => {
+    // Stats entries represent existing filesystem files, not archive entries — reject
+    if (!("type" in entry)) return false;
+    // Only allow regular files and directories; reject symlinks, hard links, devices
+    if (!SAFE_TAR_TYPES.has(entry.type)) return false;
+    if (entryPath.startsWith("/") || entryPath.includes("..")) return false;
+    const dest = resolve(resolvedRoot, entryPath);
+    return dest === resolvedRoot || dest.startsWith(resolvedRoot + sep);
+  };
 }
 
 async function collectPythonFiles(
@@ -140,7 +160,7 @@ export async function extractPythonPackage(
       file: tgzPath,
       cwd: extractDir,
       strip: 1,
-      filter: (path: string) => isSafeEntry(path),
+      filter: makeTarFilter(extractDir),
     });
   }
 
@@ -165,6 +185,7 @@ export async function extractPythonPackage(
  * We only extract text files matching PYTHON_ALLOWED_EXTENSIONS.
  */
 async function extractWheel(bytes: Buffer, destDir: string): Promise<void> {
+  const resolvedRoot = resolve(destDir);
   let offset = 0;
 
   while (offset < bytes.length - 4) {
@@ -181,10 +202,20 @@ async function extractWheel(bytes: Buffer, destDir: string): Promise<void> {
     const dataOffset = offset + 30 + filenameLength + extraLength;
 
     const ext = extname(filename);
-    const isSafe = isSafeEntry(filename) && !filename.endsWith("/");
     const isAllowed = PYTHON_ALLOWED_EXTENSIONS.has(ext);
+    const isNotDir = !filename.endsWith("/");
+    // Reject absolute paths and traversal sequences before resolving
+    const hasTraversal = filename.startsWith("/") || filename.includes("..");
 
-    if (isAllowed && isSafe && uncompressedSize < MAX_FILE_SIZE) {
+    if (isAllowed && isNotDir && !hasTraversal && uncompressedSize < MAX_FILE_SIZE) {
+      const destPath = join(destDir, filename);
+      // Canonical zip-slip check: resolved destination must stay within destDir
+      const resolvedDest = resolve(destPath);
+      if (!resolvedDest.startsWith(resolvedRoot + sep)) {
+        offset = dataOffset + compressedSize;
+        continue;
+      }
+
       const compressedData = bytes.subarray(dataOffset, dataOffset + compressedSize);
       let fileBytes: Buffer;
 
@@ -201,10 +232,9 @@ async function extractWheel(bytes: Buffer, destDir: string): Promise<void> {
         continue;
       }
 
-      // Write to dest directory
-      const destPath = join(destDir, filename);
-      const dirPath = destPath.substring(0, destPath.lastIndexOf("/"));
-      if (dirPath && dirPath !== destDir) {
+      // Create parent directory and write file
+      const dirPath = dirname(destPath);
+      if (dirPath !== destDir) {
         await mkdir(dirPath, { recursive: true });
       }
       await writeFile(destPath, fileBytes);
