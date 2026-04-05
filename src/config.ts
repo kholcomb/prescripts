@@ -28,8 +28,6 @@ export async function loadConfig(dir: string): Promise<NpmPrescriptsConfig> {
     const trust: TrustConfig = {
       signed: parsed.trust?.signed ?? DEFAULT_TRUST.signed,
       attested: parsed.trust?.attested ?? DEFAULT_TRUST.attested,
-      minWeeklyDownloads:
-        parsed.trust?.minWeeklyDownloads ?? DEFAULT_TRUST.minWeeklyDownloads,
       minVersions: parsed.trust?.minVersions ?? DEFAULT_TRUST.minVersions,
     };
 

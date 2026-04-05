@@ -100,8 +100,6 @@ function renderPackage(pkg: PackageReport): string {
     signals.push(c(YELLOW, `[${pkg.source.type.toUpperCase()}]`));
   if (provenance.maintainerCount !== null)
     signals.push(c(DIM, `[${provenance.maintainerCount} maintainer${provenance.maintainerCount === 1 ? "" : "s"}]`));
-  if (provenance.weeklyDownloads !== null)
-    signals.push(c(DIM, `[${provenance.weeklyDownloads.toLocaleString()} dl/wk]`));
   const { firstPublishedAt, publishedAt, totalVersions } = provenance;
   if (firstPublishedAt && publishedAt && (totalVersions ?? 0) >= 5) {
     const ageDays = (new Date(publishedAt).getTime() - new Date(firstPublishedAt).getTime()) / (1000 * 60 * 60 * 24);

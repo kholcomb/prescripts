@@ -52,15 +52,6 @@ function provenanceScore(provenance: ProvenanceInfo, trust: TrustConfig): number
   if (provenance.installScriptIsNew === true) score += 3;
   if ((provenance.totalVersions ?? 99) <= 2) score += 2;
 
-  const dl = provenance.weeklyDownloads;
-  if (dl !== null) {
-    if (dl < 100) score += 3;
-    else if (dl < 1000) score += 2;
-    else if (dl < trust.minWeeklyDownloads) score += 1;
-  } else {
-    score += 1; // unknown downloads — mild upward pressure
-  }
-
   if ((provenance.maintainerCount ?? 2) === 1) score += 1;
   if (provenance.attestationRegressed === true) score += 3;
   if (provenance.deprecated !== null) score += 2;
@@ -90,9 +81,6 @@ function provenanceScore(provenance: ProvenanceInfo, trust: TrustConfig): number
   const totalV = provenance.totalVersions ?? 0;
   if (totalV >= trust.minVersions * 5) score -= 2;
   else if (totalV >= trust.minVersions) score -= 1;
-
-  if (dl !== null && dl >= trust.minWeeklyDownloads * 10) score -= 2;
-  else if (dl !== null && dl >= trust.minWeeklyDownloads) score -= 1;
 
   return score;
 }
@@ -263,7 +251,6 @@ export function computeRisk(
 export const DEFAULT_TRUST: TrustConfig = {
   signed: true,
   attested: true,
-  minWeeklyDownloads: 10_000,
   minVersions: 10,
 };
 

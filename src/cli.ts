@@ -602,7 +602,7 @@ function parseOpts(raw: CliScanOptions): ScanOptions {
     sarif: raw.sarif,
     outputDir: raw.outputDir ?? null,
     apiUrl: raw.apiUrl ?? null,
-    trust: { signed: true, attested: true, minWeeklyDownloads: 10_000, minVersions: 10 },
+    trust: { signed: true, attested: true, minVersions: 10 },
     pypiAttestations: true,
     strict: raw.strict ?? false,
   };

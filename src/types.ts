@@ -139,8 +139,6 @@ export interface TrustConfig {
   signed: boolean;
   /** Reduce confidence for Sigstore-attested packages. Default: true */
   attested: boolean;
-  /** Weekly download count above which a package is considered "popular". Default: 10000 */
-  minWeeklyDownloads: number;
   /** Version count above which a package is considered "mature". Default: 10 */
   minVersions: number;
 }
