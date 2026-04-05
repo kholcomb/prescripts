@@ -79,7 +79,10 @@ export async function runScan(dir: string, opts: ScanOptions): Promise<number> {
 
   const plugins = await detectEcosystems(projectDir);
   if (plugins.length === 0) {
-    process.stderr.write("No supported lockfile found (package-lock.json, requirements.txt, poetry.lock).\n");
+    process.stderr.write(
+      "No supported lockfile found.\n" +
+      "Supported: package-lock.json, uv.lock, poetry.lock, requirements*.txt, Cargo.lock, Gemfile.lock\n"
+    );
     return 2;
   }
 
