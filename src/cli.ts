@@ -74,7 +74,11 @@ async function scanRef(
 
   const lifecycleScripts = extractLifecycleScripts(packageJson);
   const binaryDownload = extractBinaryField(packageJson);
-  const advisories = advisoryMap.get(`${ref.name}@${ref.version}`) ?? [];
+  // Prefer SHA-keyed lookup (content-pinned) over version-keyed (range-matched)
+  const advisories =
+    (ref.integrity ? advisoryMap.get(`${ref.name}@${ref.integrity}`) : undefined) ??
+    advisoryMap.get(`${ref.name}@${ref.version}`) ??
+    [];
 
   if (!hasLifecycleScripts(lifecycleScripts) && !binaryDownload && advisories.length === 0) {
     return null; // nothing to report

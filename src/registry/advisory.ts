@@ -122,20 +122,27 @@ export async function fetchAdvisories(
         );
         if (matching.length === 0) continue;
 
-        const key = `${name}@${version}`;
-        result.set(
-          key,
-          matching.map((a) => ({
-            id: a.id,
-            title: a.title,
-            severity: mapSeverity(a.severity),
-            url: a.url,
-            vulnerableVersions: a.vulnerable_versions,
-            patchedVersions: a.patched_versions ?? null,
-            cves: a.cves ?? [],
-            cvssScore: a.cvss?.score ?? null,
-          }))
-        );
+        const mapped = matching.map((a) => ({
+          id: a.id,
+          title: a.title,
+          severity: mapSeverity(a.severity),
+          url: a.url,
+          vulnerableVersions: a.vulnerable_versions,
+          patchedVersions: a.patched_versions ?? null,
+          cves: a.cves ?? [],
+          cvssScore: a.cvss?.score ?? null,
+        }));
+
+        // Primary key: name@version
+        result.set(`${name}@${version}`, mapped);
+
+        // Secondary key: name@integrity — ties the advisory to a specific
+        // tarball hash so re-published compromised tarballs under the same
+        // version number are tracked independently.
+        const ref = refs.find((r) => r.name === name && r.version === version);
+        if (ref?.integrity) {
+          result.set(`${name}@${ref.integrity}`, mapped);
+        }
       }
     }
   } catch {
