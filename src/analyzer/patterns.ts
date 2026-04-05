@@ -37,8 +37,8 @@ export const PATTERN_REGISTRY: ReadonlyArray<PatternDef> = [
     category: "network",
     severity: "high",
     description: "Network request in lifecycle script",
-    // Python files have dedicated python_network patterns — exclude to prevent bleed
-    sourceExclude: /\.py\b/,
+    // Python/Rust/Ruby files have dedicated patterns — exclude to prevent bleed
+    sourceExclude: /\.(py|rs|rb|gemspec)\b/,
     patterns: [
       /\bcurl\b/,
       /\bwget\b/,
@@ -52,9 +52,9 @@ export const PATTERN_REGISTRY: ReadonlyArray<PatternDef> = [
     category: "obfuscation",
     severity: "high",
     description: "Encoding or dynamic code evaluation",
-    // Python files have dedicated python_obfuscation patterns — exclude to prevent bleed.
-    // Specifically prevents exec(f.read(), about) (version-loading idiom) from matching.
-    sourceExclude: /\.py\b/,
+    // Python/Rust/Ruby files have dedicated patterns — exclude to prevent bleed.
+    // Specifically prevents exec(f.read(), about) (Python version-loading idiom) from matching.
+    sourceExclude: /\.(py|rs|rb|gemspec)\b/,
     patterns: [
       /\beval\s*\(/,
       /\bFunction\s*\(/,
@@ -85,10 +85,10 @@ export const PATTERN_REGISTRY: ReadonlyArray<PatternDef> = [
     category: "dynamic_exec",
     severity: "high",
     description: "Dynamic process execution",
-    // Python files have dedicated python_exec / python_shell_exec patterns.
-    // Excludes Python to prevent: exec(f.read(), about) version-loading false positive,
-    // and subprocess.*() being caught by both JS and Python patterns simultaneously.
-    sourceExclude: /\.py\b/,
+    // Python/Rust/Ruby files have dedicated patterns.
+    // Excludes Python to prevent: exec(f.read(), about) version-loading false positive.
+    // Excludes Rust/Ruby to prevent JS patterns firing on their exec/spawn idioms.
+    sourceExclude: /\.(py|rs|rb|gemspec)\b/,
     patterns: [
       /\bchild_process\b/,
       /\bexecSync\s*\(/,
@@ -474,6 +474,157 @@ export const PATTERN_REGISTRY: ReadonlyArray<PatternDef> = [
       /\bctypes\.CDLL\s*\(/,
       /\bcffi\.FFI\s*\(\s*\)/,
       /\bctypes\.WinDLL\s*\(/,
+    ],
+  },
+
+  // ── Rust/Cargo-specific patterns ───────────────────────────────────────────
+
+  {
+    // high: Command::new() in build.rs spawns system processes at compile time.
+    // Legitimate uses include running code generators (protoc, bindgen CLI).
+    // Suspicious when combined with network tools or shell invocations.
+    category: "cargo_exec",
+    severity: "high",
+    description: "Process execution in Rust build script",
+    sourceMatch: /\.rs\b|build\.rs/,
+    patterns: [
+      // std::process::Command — primary way to spawn processes in Rust
+      /\bCommand::new\s*\(/,
+      // std::process::Command builder methods that execute
+      /\.spawn\s*\(\s*\)(?!\s*\.)/, // .spawn() — async process
+      /\.output\s*\(\s*\)/,         // .output() — wait for completion
+      /\.status\s*\(\s*\)/,         // .status() — exit code only
+      // std::process::exit with non-zero code in build scripts is suspicious
+      // (legitimate build failures use panic! or return Err)
+    ],
+  },
+  {
+    // high: network connections from build.rs can download payloads or exfiltrate.
+    // Legitimate uses: very rare — build scripts should download via Cargo features,
+    // not raw network calls.
+    category: "cargo_network",
+    severity: "high",
+    description: "Network connection in Rust build script",
+    sourceMatch: /\.rs\b|build\.rs/,
+    patterns: [
+      /\bTcpStream::connect\s*\(/,
+      /\bUdpSocket::bind\s*\(/,
+      /\breqwest::/,      // popular HTTP client
+      /\bureq::/,         // lightweight HTTP client
+      /\bminreq::/,       // minimal HTTP client
+      /\battohttpc::/,    // synchronous HTTP client
+    ],
+  },
+  {
+    // medium: include_bytes!/include_str! with large data can embed encoded payloads.
+    // Legitimate uses: embedding static assets. High-risk when combined with exec.
+    category: "cargo_embedded_data",
+    severity: "medium",
+    description: "Embedded binary/string data in Rust source",
+    sourceMatch: /\.rs\b|build\.rs/,
+    patterns: [
+      // Long base64 or hex strings embedded in Rust code
+      /['"][A-Za-z0-9+/]{80,}={0,2}['"]/,
+      // include_bytes!/include_str! macro — embeds file contents at compile time
+      /\binclude_bytes!\s*\(/,
+    ],
+  },
+  {
+    // high: unsafe blocks access raw memory and call C functions.
+    // In build.rs, combined with Command/network is a strong signal.
+    category: "cargo_unsafe",
+    severity: "medium",
+    description: "Unsafe Rust code in build script",
+    sourceMatch: /build\.rs/,  // restrict to build.rs only — unsafe is normal in lib code
+    patterns: [
+      /\bunsafe\s*\{/,
+      /\bextern\s+"C"\s*\{/,
+    ],
+  },
+
+  // ── Ruby/RubyGems-specific patterns ────────────────────────────────────────
+
+  {
+    // high: shell execution patterns in Ruby — direct equivalents of JS exec/spawn.
+    // Ruby's backtick syntax and system() are commonly abused in gem attacks.
+    // Attacks: rest-client (2019), strong_password (2019), bootstrap-sass (2019).
+    category: "ruby_exec",
+    severity: "high",
+    description: "Shell or process execution in Ruby gem",
+    sourceMatch: /\.rb\b|\.gemspec\b/,
+    patterns: [
+      /\bsystem\s*\(/,             // system("cmd") — executes in shell
+      /\bexec\s*\(/,               // exec("cmd") — replaces process
+      /\bspawn\s*\(/,              // spawn("cmd") — non-blocking
+      /`[^`]+`/,                   // backtick execution
+      /\bIO\.popen\s*\(/,          // IO.popen("cmd") — pipe to/from process
+      /\bOpen3\./,                 // Open3.popen3/capture2/capture3
+      /%x\s*[\[({]/,              // %x[cmd] alternative syntax
+      /Kernel\s*\.\s*(?:exec|system|spawn)\s*\(/, // explicit Kernel method
+    ],
+  },
+  {
+    // high: network calls in Ruby gems — can download payloads or exfiltrate data.
+    category: "ruby_network",
+    severity: "high",
+    description: "Network request in Ruby gem",
+    sourceMatch: /\.rb\b|\.gemspec\b/,
+    patterns: [
+      /\bNet::HTTP\b/,
+      /\bURI\.open\s*\(/,
+      /\bopen\s*\(\s*["']https?:/,  // open-uri style: open("http://...")
+      /\brequire\s+['"]open-uri['"]/,
+      /\bHTTParty\b/,
+      /\bFaraday\b/,
+      /\bExcon\b/,
+      /\btyphoeus\b/i,
+      /\bsocket\.connect\s*\(/,
+      /\bTCPSocket\.new\s*\(/,
+      /\bUDPSocket\.new\s*\(/,
+    ],
+  },
+  {
+    // high: encoding/eval in Ruby — common obfuscation in gem attacks.
+    category: "ruby_obfuscation",
+    severity: "high",
+    description: "Encoding or dynamic evaluation in Ruby gem",
+    sourceMatch: /\.rb\b|\.gemspec\b/,
+    patterns: [
+      /\beval\s*\(/,
+      /\bBase64\.decode64\s*\(/,
+      /\bBase64\.strict_decode64\s*\(/,
+      /\.gsub\s*\(.*\)\.reverse/,     // string reversal obfuscation
+      // Long base64 literals
+      /['"][A-Za-z0-9+/]{80,}={0,2}['"]/,
+      /\bMarshal\.load\s*\(/,          // deserializes Ruby objects — arbitrary code exec
+      /\bBinding\b.*\beval\b/,
+    ],
+  },
+  {
+    // high: .gemspec with extensions field means C code compiles at gem install time.
+    // The compilation runs extconf.rb which can execute arbitrary Ruby/shell code.
+    // This is a legitimate pattern for native extensions but a high-value attack vector.
+    category: "gem_extension",
+    severity: "high",
+    description: ".gemspec declares a C extension — native code compiles at install time",
+    sourceMatch: /\.gemspec\b/,
+    patterns: [
+      /\.extensions\s*=\s*\[/,       // s.extensions = ["ext/extconf.rb"]
+      /add_extension\s*\(/,          // alternative form in some gemspecs
+    ],
+  },
+  {
+    // critical: rubygems_plugin.rb is loaded by the gem command on every invocation.
+    // Persistence mechanism — survives gem uninstall, runs on the developer machine
+    // every time they use the gem CLI. Used in the rest-client 2019 compromise.
+    category: "gem_plugin_hook",
+    severity: "critical",
+    description: "rubygems_plugin.rb present — executes on every 'gem' command invocation",
+    sourceMatch: /rubygems_plugin\.rb/,
+    patterns: [
+      // Any non-trivial content in rubygems_plugin.rb is suspicious.
+      // Legitimate uses exist but are extremely rare.
+      /\bGem\b/,  // Any gem API usage in this file is the intended trigger
     ],
   },
 ];

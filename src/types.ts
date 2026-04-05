@@ -5,7 +5,7 @@ export type SourceType =
   | "direct-tarball"
   | "local";
 
-export type PackageManager = "npm" | "pip";
+export type PackageManager = "npm" | "pip" | "cargo" | "gem";
 
 export type Severity = "critical" | "high" | "medium" | "low";
 export type Confidence = "high" | "medium" | "low";

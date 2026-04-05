@@ -6,7 +6,7 @@ import { buildProjectReport, toJson } from "./report/json-report.js";
 import { renderReport, renderProgress, clearProgress } from "./report/human.js";
 import { toSarif } from "./report/sarif.js";
 import { parseLockfile } from "./lockfile/parser.js";
-import { detectEcosystems, scanAny, npmPlugin, pipPlugin } from "./ecosystem/index.js";
+import { detectEcosystems, scanAny, npmPlugin, getPluginByName } from "./ecosystem/index.js";
 import type { EcosystemPlugin } from "./ecosystem/types.js";
 import type {
   PackageReport,
@@ -117,7 +117,7 @@ export async function runCheck(
   opts: ScanOptions,
   pm?: string
 ): Promise<number> {
-  const plugin = pm === "pip" ? pipPlugin : npmPlugin;
+  const plugin = (pm ? getPluginByName(pm) : null) ?? npmPlugin;
   plugin.init(opts);
 
   const fileConfig = await loadConfig(process.cwd());
@@ -629,7 +629,7 @@ export function buildProgram(): Command {
           "Use --pm pip to scan a PyPI package (e.g. check requests@2.28.0 --pm pip)"
       )
       .option("--depth <n>", "Max dependency resolution depth (npm only)", "5")
-      .option("--pm <manager>", "Package manager: npm|pip (default: npm)", "npm")
+      .option("--pm <manager>", "Package manager: npm|pip|cargo|gem (default: npm)", "npm")
   ).action(async (pkg: string, opts: CliScanOptions & { pm: string }) => {
     try {
       const code = await runCheck(pkg, parseOpts(opts), opts.pm);

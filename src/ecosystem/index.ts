@@ -19,9 +19,18 @@ import { scanPackage } from "../analyzer/scanner.js";
 import { scoreFindings, applyBinaryDownloaderCluster, computeRisk } from "../analyzer/confidence.js";
 import { npmPlugin } from "./npm.js";
 import { pipPlugin } from "./pip.js";
+import { cargoPlugin } from "./cargo.js";
+import { gemPlugin } from "./gem.js";
+
+/** Lookup a plugin by packageManager name (for --pm CLI flag). */
+export function getPluginByName(pm: string): EcosystemPlugin | null {
+  return ECOSYSTEM_PLUGINS.find((p) => p.packageManager === pm) ?? null;
+}
 
 export { npmPlugin } from "./npm.js";
 export { pipPlugin } from "./pip.js";
+export { cargoPlugin } from "./cargo.js";
+export { gemPlugin } from "./gem.js";
 export type { EcosystemPlugin, ExtractionResult } from "./types.js";
 
 /**
@@ -31,6 +40,8 @@ export type { EcosystemPlugin, ExtractionResult } from "./types.js";
 export const ECOSYSTEM_PLUGINS: EcosystemPlugin[] = [
   npmPlugin,
   pipPlugin,
+  cargoPlugin,
+  gemPlugin,
 ];
 
 /**

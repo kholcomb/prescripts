@@ -26,6 +26,7 @@ const ALWAYS_HIGH_CONFIDENCE = new Set([
   "system_recon",
   "python_shell_exec",        // subprocess calling curl/wget/bash/nc, or shell=True
   "pth_persistence",          // .pth file with executable code — persistence mechanism
+  "gem_plugin_hook",          // rubygems_plugin.rb — executes on every gem command
 ]);
 
 // Categories where provenance trust signals have more weight —
