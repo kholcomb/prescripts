@@ -11,6 +11,7 @@
     "noImplicitOverride": true,
     "exactOptionalPropertyTypes": true,
     "forceConsistentCasingInFileNames": true,
+    "types": ["node"],
     "skipLibCheck": true,
     "declaration": true,
     "declarationMap": true,
