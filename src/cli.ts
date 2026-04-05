@@ -19,8 +19,9 @@ import { fetchAdvisories } from "./registry/advisory.js";
 import { scoreFindings, applyBinaryDownloaderCluster, computeRisk } from "./analyzer/confidence.js";
 import { loadConfig } from "./config.js";
 import type { PackageReport, PackageRef, ScanOptions, Severity, Finding, AdvisoryMatch, LifecycleScripts, RiskLevel } from "./types.js";
-import { writeFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { writeFile, readFile } from "node:fs/promises";
+import { resolve, join } from "node:path";
+import { spawn } from "node:child_process";
 
 async function scanRef(
   ref: PackageRef,
@@ -362,6 +363,154 @@ function parseOpts(raw: CliScanOptions): ScanOptions {
   };
 }
 
+interface FixCandidate {
+  name: string;
+  currentVersion: string;
+  patchedVersions: string;
+  cves: string[];
+  advisoryTitle: string;
+  isDirect: boolean;
+}
+
+async function readDirectDeps(projectDir: string): Promise<Set<string>> {
+  try {
+    const raw = await readFile(join(projectDir, "package.json"), "utf-8");
+    const pkg = JSON.parse(raw) as {
+      dependencies?: Record<string, string>;
+      devDependencies?: Record<string, string>;
+      optionalDependencies?: Record<string, string>;
+    };
+    const names = new Set<string>();
+    for (const key of ["dependencies", "devDependencies", "optionalDependencies"] as const) {
+      for (const name of Object.keys(pkg[key] ?? {})) names.add(name);
+    }
+    return names;
+  } catch {
+    return new Set();
+  }
+}
+
+function spawnNpmInstall(args: string[], cwd: string): Promise<number> {
+  return new Promise((resolve) => {
+    const child = spawn("npm", ["install", ...args], {
+      cwd,
+      stdio: "inherit",
+      shell: process.platform === "win32",
+    });
+    child.on("close", (code) => resolve(code ?? 1));
+  });
+}
+
+export async function runFix(dir: string, opts: ScanOptions, apply: boolean): Promise<number> {
+  const projectDir = resolve(dir);
+  setRegistry(opts.registry);
+  setRequestTimeout(opts.timeout);
+  setRegistryConcurrency(opts.concurrency);
+
+  const fileConfig = await loadConfig(projectDir);
+  const mergedOpts: ScanOptions = {
+    ...opts,
+    trust: opts.trust ?? fileConfig.trust,
+    minRisk: opts.minRisk ?? fileConfig.minRisk,
+  };
+
+  const cache = new DiskCache(mergedOpts.cacheDir);
+  const refs = await parseLockfile(projectDir);
+  const directDeps = await readDirectDeps(projectDir);
+  const advisoryMap = await fetchAdvisories(refs, mergedOpts.registry);
+
+  const limit = pLimit(opts.concurrency);
+  let completed = 0;
+  const total = refs.length;
+  const reports: PackageReport[] = [];
+
+  await Promise.all(
+    refs.map((ref) =>
+      limit(async () => {
+        try {
+          const report = await scanRef(ref, mergedOpts, cache, projectDir, advisoryMap);
+          if (report) reports.push(report);
+        } catch {
+          // best-effort
+        } finally {
+          completed++;
+          renderProgress(completed, total, `${ref.name}@${ref.version}`);
+        }
+      })
+    )
+  );
+
+  clearProgress();
+
+  // Collect one fix candidate per package (highest severity advisory with a patch)
+  const candidateMap = new Map<string, FixCandidate>();
+  for (const report of reports) {
+    for (const advisory of report.advisories) {
+      if (!advisory.patchedVersions) continue;
+      const existing = candidateMap.get(report.name);
+      const severityOrder: Record<string, number> = { critical: 4, high: 3, medium: 2, low: 1 };
+      if (existing && (severityOrder[existing.cves[0] ?? ""] ?? 0) >= (severityOrder[advisory.severity] ?? 0)) continue;
+      candidateMap.set(report.name, {
+        name: report.name,
+        currentVersion: report.version,
+        patchedVersions: advisory.patchedVersions,
+        cves: advisory.cves,
+        advisoryTitle: advisory.title,
+        isDirect: directDeps.has(report.name),
+      });
+    }
+  }
+
+  const candidates = Array.from(candidateMap.values()).sort((a, b) =>
+    Number(b.isDirect) - Number(a.isDirect) || a.name.localeCompare(b.name)
+  );
+
+  if (candidates.length === 0) {
+    process.stdout.write("No advisory findings with available patches.\n");
+    return 0;
+  }
+
+  const RESET = "\x1b[0m";
+  const BOLD = "\x1b[1m";
+  const RED = "\x1b[31m";
+  const GREEN = "\x1b[32m";
+  const YELLOW = "\x1b[33m";
+  const DIM = "\x1b[2m";
+  const NO_COLOR = process.env["NO_COLOR"] !== undefined || !process.stdout.isTTY;
+  const cc = (col: string, t: string) => NO_COLOR ? t : `${col}${t}${RESET}`;
+
+  process.stdout.write(`\n${cc(BOLD, "Advisory fixes available:")}\n\n`);
+
+  for (const c of candidates) {
+    const tag = c.isDirect ? cc(YELLOW, "[direct]") : cc(DIM, "[transitive]");
+    const cveStr = c.cves.length > 0 ? cc(DIM, `  ${c.cves.join(", ")}`) : "";
+    process.stdout.write(
+      `  ${tag} ${cc(BOLD, c.name)}  ${cc(DIM, c.currentVersion)} → ${cc(GREEN, c.patchedVersions)}\n` +
+      `         ${cc(DIM, c.advisoryTitle)}${cveStr}\n`
+    );
+  }
+
+  if (!apply) {
+    process.stdout.write(
+      `\n${cc(DIM, `Run with --apply to install fixes (${candidates.length} package${candidates.length === 1 ? "" : "s"})`)}\n`
+    );
+    return candidates.length > 0 ? 1 : 0;
+  }
+
+  // Build install args: name@"patchedVersions" for each candidate
+  const installArgs = candidates.map((c) => `${c.name}@${c.patchedVersions}`);
+  process.stdout.write(`\n${cc(BOLD, "Running:")} npm install ${installArgs.join(" ")}\n\n`);
+
+  const code = await spawnNpmInstall(installArgs, projectDir);
+  if (code !== 0) {
+    process.stderr.write(`npm install exited with code ${code}\n`);
+    return 2;
+  }
+
+  process.stdout.write(`\n${cc(GREEN, `✓ Applied ${candidates.length} fix${candidates.length === 1 ? "" : "es"}`)}\n`);
+  return 0;
+}
+
 export function buildProgram(): Command {
   const program = new Command();
 
@@ -429,6 +578,38 @@ export function buildProgram(): Command {
       process.exit(2);
     }
   });
+
+  program
+    .command("fix [dir]")
+    .description(
+      "Show advisory-driven upgrades for a project lockfile (default: cwd).\n" +
+      "Use --apply to run npm install with the patched versions."
+    )
+    .option("--apply", "Apply fixes by running npm install", false)
+    .option("--no-cache", "Skip cache reads")
+    .option("--cache-dir <path>", "Override cache directory")
+    .option("--concurrency <n>", "Max simultaneous registry requests", "5")
+    .option("--registry <url>", "npm registry URL", "https://registry.npmjs.org")
+    .option("--timeout <ms>", "Per-request timeout in milliseconds", "30000")
+    .action(async (dir: string | undefined, opts: { apply: boolean } & Pick<CliScanOptions, "concurrency" | "registry" | "noCache" | "cacheDir" | "timeout">) => {
+      try {
+        const scanOpts = parseOpts({
+          severity: "low",
+          minRisk: "low",
+          onlyFlagged: false,
+          json: false,
+          sarif: false,
+          verbose: false,
+          depth: "5",
+          ...opts,
+        });
+        const code = await runFix(dir ?? ".", scanOpts, opts.apply);
+        process.exit(code);
+      } catch (err) {
+        process.stderr.write(`Error: ${String(err)}\n`);
+        process.exit(2);
+      }
+    });
 
   return program;
 }
