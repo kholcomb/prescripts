@@ -3,6 +3,7 @@ import { extractTarball } from "./tarball.js";
 import { extractGitSource } from "./git-source.js";
 import { extractLocalSource } from "./local-source.js";
 import { fetchVersionMeta } from "../registry/client.js";
+import { resolveAuthToken } from "../registry/npmrc.js";
 
 export interface FetchResult {
   extracted: ExtractedPackage;
@@ -66,9 +67,15 @@ export async function fetchAndExtract(
     integrity = integrity ?? meta.integrity;
   }
 
+  // Resolve auth token from .npmrc for private registries
+  const authToken = sourceType === "private-registry"
+    ? await resolveAuthToken(tarballUrl, projectDir)
+    : null;
+
   const { extracted, integrityVerified } = await extractTarball(
     tarballUrl,
-    integrity
+    integrity,
+    authToken
   );
   return { extracted, sourceType, integrityVerified, resolvedUrl: tarballUrl };
 }

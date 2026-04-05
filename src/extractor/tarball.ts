@@ -42,9 +42,10 @@ async function collectFiles(
 
 export async function extractTarball(
   tarballUrl: string,
-  expectedIntegrity: string | null
+  expectedIntegrity: string | null,
+  authToken?: string | null
 ): Promise<{ extracted: ExtractedPackage; integrityVerified: boolean }> {
-  const bytes = await fetchTarball(tarballUrl);
+  const bytes = await fetchTarball(tarballUrl, authToken);
 
   let integrityVerified = false;
   if (expectedIntegrity) {

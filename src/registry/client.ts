@@ -88,11 +88,16 @@ export async function fetchVersionMeta(
   );
 }
 
-export async function fetchTarball(url: string): Promise<Buffer> {
+export async function fetchTarball(url: string, authToken?: string | null): Promise<Buffer> {
   return withLimit(() =>
     pRetry(
       async () => {
-        const res = await fetchWithTimeout(url);
+        const headers: Record<string, string> = {};
+        if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
+        const res = await fetchWithTimeout(url, { headers });
+        if (res.status === 401 || res.status === 403) {
+          throw new AbortError(`Auth required for ${url}: ${res.status}`);
+        }
         if (!res.ok) throw new Error(`Tarball fetch HTTP ${res.status}: ${url}`);
         const ab = await res.arrayBuffer();
         return Buffer.from(ab);
