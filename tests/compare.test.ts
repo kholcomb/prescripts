@@ -25,6 +25,8 @@ function makeReport(overrides: Partial<PackageReport> = {}): PackageReport {
       publisherInMaintainers: true,
       hasRegistrySignature: true,
       attestationRegressed: false,
+      firstPublishedAt: "2023-01-01T00:00:00.000Z",
+      publisherIsNewToPackage: false,
     },
     lifecycleScripts: {},
     binaryDownload: null,

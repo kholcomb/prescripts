@@ -54,8 +54,12 @@ export async function fetchProvenance(
       publisherInMaintainers: null,
       hasRegistrySignature: null,
       attestationRegressed: null,
+      firstPublishedAt: null,
+      publisherIsNewToPackage: null,
     },
     registryManifestScripts: null,
+    registryIntegrity: null,
+    registrySignatures: null,
   });
 
   if (!isPublicRegistry) {
@@ -113,6 +117,29 @@ export async function fetchProvenance(
     const publisherInMaintainers =
       publisher !== null ? maintainerNames.has(publisher) : null;
 
+    // --- Publisher history: has this person published this package before? ---
+    // true = first time publishing this package (suspicious on mature packages)
+    // false = has published before (expected)
+    // null = can't determine (no publisher info)
+    let publisherIsNewToPackage: boolean | null = null;
+    if (publisher !== null) {
+      if (versionIndex === 0) {
+        // First ever version — publisher being new is expected
+        publisherIsNewToPackage = false;
+      } else {
+        const priorPublishers = new Set(
+          versionList.slice(0, versionIndex)
+            .map((v) => meta.versions[v]?._npmUser?.name)
+            .filter((n): n is string => typeof n === "string")
+        );
+        publisherIsNewToPackage = !priorPublishers.has(publisher);
+      }
+    }
+
+    // --- First published date (for version velocity) ---
+    const firstVersion = versionList[0];
+    const firstPublishedAt = firstVersion ? (meta.time?.[firstVersion] ?? null) : null;
+
     // --- Deprecation ---
     const deprecated = versionEntry?.deprecated ?? null;
 
@@ -123,6 +150,14 @@ export async function fetchProvenance(
 
     // --- Registry manifest lifecycle scripts (for manifest confusion detection) ---
     const registryManifestScripts = extractLifecycleOnly(versionEntry?.scripts);
+
+    // --- Registry integrity and signatures (for lockfile poisoning + ECDSA checks) ---
+    const registryIntegrity = versionEntry?.dist?.integrity ?? null;
+    const rawSigs = versionEntry?.dist?.signatures;
+    const registrySignatures: Array<{ keyid: string; sig: string }> | null =
+      Array.isArray(rawSigs) && rawSigs.length > 0
+        ? (rawSigs as Array<{ keyid: string; sig: string }>)
+        : null;
 
     const provenance: ProvenanceInfo = {
       publishedAt,
@@ -137,9 +172,11 @@ export async function fetchProvenance(
       publisherInMaintainers,
       hasRegistrySignature,
       attestationRegressed,
+      firstPublishedAt,
+      publisherIsNewToPackage,
     };
 
-    return { provenance, registryManifestScripts };
+    return { provenance, registryManifestScripts, registryIntegrity, registrySignatures };
   } catch (err) {
     return unavailable(`Failed to fetch provenance: ${String(err)}`);
   }

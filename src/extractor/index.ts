@@ -10,6 +10,9 @@ export interface FetchResult {
   sourceType: SourceType;
   integrityVerified: boolean;
   resolvedUrl: string;
+  /** SRI-format sha512 of the downloaded tarball (sha512-<base64>).
+   *  null for git/local sources. Used for attestation subject verification. */
+  computedIntegrity: string | null;
 }
 
 function detectSourceType(resolved: string): SourceType {
@@ -44,7 +47,7 @@ export async function fetchAndExtract(
       resolved,
       projectDir
     );
-    return { extracted, sourceType, integrityVerified, resolvedUrl: resolved };
+    return { extracted, sourceType, integrityVerified, resolvedUrl: resolved, computedIntegrity: null };
   }
 
   if (sourceType === "git") {
@@ -52,7 +55,7 @@ export async function fetchAndExtract(
       resolved,
       ref.integrity
     );
-    return { extracted, sourceType, integrityVerified, resolvedUrl: resolved };
+    return { extracted, sourceType, integrityVerified, resolvedUrl: resolved, computedIntegrity: null };
   }
 
   // Registry, private-registry, direct-tarball
@@ -72,10 +75,10 @@ export async function fetchAndExtract(
     ? await resolveAuthToken(tarballUrl, projectDir)
     : null;
 
-  const { extracted, integrityVerified } = await extractTarball(
+  const { extracted, integrityVerified, computedIntegrity } = await extractTarball(
     tarballUrl,
     integrity,
     authToken
   );
-  return { extracted, sourceType, integrityVerified, resolvedUrl: tarballUrl };
+  return { extracted, sourceType, integrityVerified, resolvedUrl: tarballUrl, computedIntegrity };
 }

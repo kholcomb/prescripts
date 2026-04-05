@@ -44,17 +44,26 @@ export async function extractTarball(
   tarballUrl: string,
   expectedIntegrity: string | null,
   authToken?: string | null
-): Promise<{ extracted: ExtractedPackage; integrityVerified: boolean }> {
+): Promise<{ extracted: ExtractedPackage; integrityVerified: boolean; computedIntegrity: string }> {
   const bytes = await fetchTarball(tarballUrl, authToken);
+
+  // Always compute sha512 — used for both integrity verification and attestation subject check
+  const sha512B64 = createHash("sha512").update(bytes).digest("base64");
+  const computedIntegrity = `sha512-${sha512B64}`;
 
   let integrityVerified = false;
   if (expectedIntegrity) {
-    const [algo, expected] = expectedIntegrity.split("-");
-    if (algo && expected) {
-      const hashAlgo = algo === "sha512" ? "sha512" : algo === "sha1" ? "sha1" : null;
-      if (hashAlgo) {
-        const actual = createHash(hashAlgo).update(bytes).digest("base64");
-        integrityVerified = actual === expected;
+    if (expectedIntegrity.startsWith("sha512-")) {
+      integrityVerified = computedIntegrity === expectedIntegrity;
+    } else {
+      // Legacy sha1 support
+      const [algo, expected] = expectedIntegrity.split("-");
+      if (algo && expected) {
+        const hashAlgo = algo === "sha1" ? "sha1" : null;
+        if (hashAlgo) {
+          const actual = createHash(hashAlgo).update(bytes).digest("base64");
+          integrityVerified = actual === expected;
+        }
       }
     }
   }
@@ -80,5 +89,5 @@ export async function extractTarball(
   const fileMap = new Map<string, string>();
   await collectFiles(extractDir, "", fileMap);
 
-  return { extracted: { packageJson, fileMap }, integrityVerified };
+  return { extracted: { packageJson, fileMap }, integrityVerified, computedIntegrity };
 }

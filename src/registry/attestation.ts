@@ -1,24 +1,26 @@
 /**
  * Fetches and decodes an npm Sigstore provenance attestation.
  *
- * We parse the bundle to extract the claimed source repo and build workflow —
- * this gives a "built in CI from this repo" signal without requiring full
- * cryptographic verification (Fulcio cert chain + Rekor log lookup).
+ * We parse the bundle to extract the claimed source repo, build workflow,
+ * and subject digest — the subject digest lets us verify that the attested
+ * tarball matches the one we actually downloaded (attestation substitution check).
  *
- * Absence of an attestation is not flagged as a finding; it's surfaced as
- * context alongside other provenance signals so the consumer can weigh it.
+ * Full cryptographic verification (Fulcio cert chain + Rekor log lookup) is
+ * not yet implemented — the subject check and the separate ECDSA registry
+ * signature verify the tarball content independently.
  */
 
-export interface AttestationInfo {
-  sourceRepo: string | null;    // e.g. "github.com/expressjs/express"
-  buildWorkflow: string | null; // e.g. ".github/workflows/release.yml"
-  predicateType: string | null; // "https://slsa.dev/provenance/v1" etc.
-}
+import type { AttestationInfo } from "../types.js";
+export type { AttestationInfo };
+import { verifySigstoreBundle } from "./sigstore-verify.js";
 
 interface AttestationsResponse {
   attestations?: Array<{
     predicateType?: string;
+    /** Legacy format: base64-encoded JSON bundle */
     bundleBytes?: string;
+    /** Current format (npm registry v2): bundle as a direct JSON object */
+    bundle?: Record<string, unknown>;
   }>;
 }
 
@@ -26,9 +28,16 @@ interface SigstoreBundle {
   dsseEnvelope?: { payload?: string };
 }
 
-// SLSA v1
-interface SLSAv1Statement {
+interface InTotoStatement {
   predicateType?: string;
+  subject?: Array<{
+    name?: string;
+    digest?: Record<string, string>; // algorithm → hex digest
+  }>;
+}
+
+// SLSA v1
+interface SLSAv1Statement extends InTotoStatement {
   predicate?: {
     buildDefinition?: {
       externalParameters?: {
@@ -39,13 +48,27 @@ interface SLSAv1Statement {
 }
 
 // SLSA v0.2
-interface SLSAv02Statement {
-  predicateType?: string;
+interface SLSAv02Statement extends InTotoStatement {
   predicate?: {
     invocation?: {
       configSource?: { uri?: string; entryPoint?: string };
     };
   };
+}
+
+/** Convert the in-toto subject digest to SRI format (sha512-<base64>).
+ *  The in-toto spec stores digests as hex; npm uses sha512. */
+function extractSubjectIntegrity(stmt: InTotoStatement): string | null {
+  const subject = stmt.subject?.[0];
+  if (!subject?.digest) return null;
+  const hexDigest = subject.digest["sha512"] ?? null;
+  if (!hexDigest) return null;
+  try {
+    const b64 = Buffer.from(hexDigest, "hex").toString("base64");
+    return `sha512-${b64}`;
+  } catch {
+    return null;
+  }
 }
 
 export async function fetchAttestation(
@@ -65,12 +88,20 @@ export async function fetchAttestation(
         a.predicateType?.startsWith("https://slsa.dev/provenance/")
       ) ?? attestations[0];
 
-    if (!entry?.bundleBytes) return null;
+    if (!entry) return null;
 
-    // Decode Sigstore bundle → DSSE envelope → in-toto payload
-    const bundle = JSON.parse(
-      Buffer.from(entry.bundleBytes, "base64").toString("utf-8")
-    ) as SigstoreBundle;
+    // Support both current format (bundle object) and legacy (bundleBytes base64 string)
+    const bundleInput = entry.bundle ?? (
+      entry.bundleBytes
+        ? JSON.parse(Buffer.from(entry.bundleBytes, "base64").toString("utf-8"))
+        : null
+    );
+    if (!bundleInput) return null;
+
+    // Full Sigstore chain verification (DSSE + cert chain + Rekor SET + Merkle proof)
+    const verifyResult = await verifySigstoreBundle(bundleInput);
+
+    const bundle = bundleInput as SigstoreBundle;
 
     const payloadB64 = bundle.dsseEnvelope?.payload;
     if (!payloadB64) return null;
@@ -81,12 +112,14 @@ export async function fetchAttestation(
 
     let sourceRepo: string | null = null;
     let buildWorkflow: string | null = null;
+    let subjectIntegrity: string | null = null;
 
     if (predicateType === "https://slsa.dev/provenance/v1") {
       const stmt = JSON.parse(raw) as SLSAv1Statement;
       const wf = stmt.predicate?.buildDefinition?.externalParameters?.workflow;
       sourceRepo = wf?.repository ?? null;
       buildWorkflow = wf?.path ?? null;
+      subjectIntegrity = extractSubjectIntegrity(stmt);
     } else if (predicateType === "https://slsa.dev/provenance/v0.2") {
       const stmt = JSON.parse(raw) as SLSAv02Statement;
       const src = stmt.predicate?.invocation?.configSource;
@@ -96,6 +129,7 @@ export async function fetchAttestation(
         sourceRepo = uri.replace(/^git\+/, "").split("@")[0] ?? null;
       }
       buildWorkflow = src?.entryPoint ?? null;
+      subjectIntegrity = extractSubjectIntegrity(stmt);
     }
 
     // Normalize to display form: drop "https://" prefix
@@ -103,7 +137,15 @@ export async function fetchAttestation(
       sourceRepo = sourceRepo.slice("https://".length);
     }
 
-    return { sourceRepo, buildWorkflow, predicateType };
+    return {
+      sourceRepo,
+      buildWorkflow,
+      predicateType,
+      subjectIntegrity,
+      sigstoreVerified: verifyResult.verified,
+      signingIdentity: verifyResult.signingIdentity,
+      sigstoreErrors: verifyResult.errors.length > 0 ? verifyResult.errors : null,
+    };
   } catch {
     return null; // best-effort
   }

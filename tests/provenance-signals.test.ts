@@ -53,6 +53,10 @@ beforeEach(() => {
     sourceRepo: "github.com/owner/pkg",
     buildWorkflow: ".github/workflows/release.yml",
     predicateType: "https://slsa.dev/provenance/v1",
+    subjectIntegrity: null,
+    sigstoreVerified: null,
+    signingIdentity: null,
+    sigstoreErrors: null,
   });
 });
 
@@ -165,6 +169,117 @@ describe("registry signature presence", () => {
     vi.spyOn(client, "fetchFullMeta").mockResolvedValue(meta as never);
     const { provenance } = await fetchProvenance("pkg", "1.0.1", PUBLIC_REGISTRY);
     expect(provenance.hasRegistrySignature).toBeNull();
+  });
+});
+
+describe("publisher history", () => {
+  it("publisherIsNewToPackage is false when publisher has published before", async () => {
+    vi.spyOn(client, "fetchFullMeta").mockResolvedValue(makeMeta() as never);
+    const { provenance } = await fetchProvenance("pkg", "1.0.1", PUBLIC_REGISTRY);
+    // alice published 1.0.0, now publishes 1.0.1 — not new
+    expect(provenance.publisherIsNewToPackage).toBe(false);
+  });
+
+  it("publisherIsNewToPackage is true when publisher has never published this package", async () => {
+    const meta = makeMeta();
+    meta.versions["1.0.1"]._npmUser = { name: "mallory" }; // new publisher
+    vi.spyOn(client, "fetchFullMeta").mockResolvedValue(meta as never);
+    const { provenance } = await fetchProvenance("pkg", "1.0.1", PUBLIC_REGISTRY);
+    expect(provenance.publisherIsNewToPackage).toBe(true);
+  });
+
+  it("publisherIsNewToPackage is false for first ever version", async () => {
+    vi.spyOn(client, "fetchFullMeta").mockResolvedValue(makeMeta() as never);
+    const { provenance } = await fetchProvenance("pkg", "1.0.0", PUBLIC_REGISTRY);
+    expect(provenance.publisherIsNewToPackage).toBe(false);
+  });
+
+  it("publisherIsNewToPackage is null when _npmUser is absent", async () => {
+    const meta = makeMeta();
+    (meta.versions["1.0.1"] as Record<string, unknown>)._npmUser = undefined;
+    vi.spyOn(client, "fetchFullMeta").mockResolvedValue(meta as never);
+    const { provenance } = await fetchProvenance("pkg", "1.0.1", PUBLIC_REGISTRY);
+    expect(provenance.publisherIsNewToPackage).toBeNull();
+  });
+});
+
+describe("version velocity", () => {
+  it("firstPublishedAt is the timestamp of the first version", async () => {
+    vi.spyOn(client, "fetchFullMeta").mockResolvedValue(makeMeta() as never);
+    const { provenance } = await fetchProvenance("pkg", "1.0.1", PUBLIC_REGISTRY);
+    expect(provenance.firstPublishedAt).toBe("2024-01-01T00:00:00.000Z");
+  });
+
+  it("firstPublishedAt is null when no time map is present", async () => {
+    const meta = makeMeta({ time: undefined });
+    vi.spyOn(client, "fetchFullMeta").mockResolvedValue(meta as never);
+    const { provenance } = await fetchProvenance("pkg", "1.0.1", PUBLIC_REGISTRY);
+    expect(provenance.firstPublishedAt).toBeNull();
+  });
+});
+
+describe("registry integrity and signatures", () => {
+  it("registryIntegrity returns dist.integrity from version entry", async () => {
+    const meta = makeMeta();
+    (meta.versions["1.0.1"].dist as Record<string, unknown>).integrity = "sha512-xyz==";
+    vi.spyOn(client, "fetchFullMeta").mockResolvedValue(meta as never);
+    const { registryIntegrity } = await fetchProvenance("pkg", "1.0.1", PUBLIC_REGISTRY);
+    expect(registryIntegrity).toBe("sha512-xyz==");
+  });
+
+  it("registryIntegrity is null when dist.integrity is absent", async () => {
+    const meta = makeMeta();
+    delete (meta.versions["1.0.1"].dist as Record<string, unknown>)["integrity"];
+    vi.spyOn(client, "fetchFullMeta").mockResolvedValue(meta as never);
+    const { registryIntegrity } = await fetchProvenance("pkg", "1.0.1", PUBLIC_REGISTRY);
+    expect(registryIntegrity).toBeNull();
+  });
+
+  it("registrySignatures returns dist.signatures array", async () => {
+    vi.spyOn(client, "fetchFullMeta").mockResolvedValue(makeMeta() as never);
+    const { registrySignatures } = await fetchProvenance("pkg", "1.0.1", PUBLIC_REGISTRY);
+    expect(registrySignatures).toHaveLength(1);
+    expect(registrySignatures?.[0]?.keyid).toBe("SHA256:...");
+  });
+
+  it("registrySignatures is null when dist.signatures is empty", async () => {
+    const meta = makeMeta();
+    (meta.versions["1.0.1"].dist as Record<string, unknown>).signatures = [];
+    vi.spyOn(client, "fetchFullMeta").mockResolvedValue(meta as never);
+    const { registrySignatures } = await fetchProvenance("pkg", "1.0.1", PUBLIC_REGISTRY);
+    expect(registrySignatures).toBeNull();
+  });
+});
+
+describe("attestation subject digest", () => {
+  it("subjectIntegrity is null when attestation has no subject", async () => {
+    vi.spyOn(attestationMod, "fetchAttestation").mockResolvedValue({
+      sourceRepo: "github.com/owner/pkg",
+      buildWorkflow: ".github/workflows/release.yml",
+      predicateType: "https://slsa.dev/provenance/v1",
+      subjectIntegrity: null,
+      sigstoreVerified: null,
+      signingIdentity: null,
+      sigstoreErrors: null,
+    });
+    vi.spyOn(client, "fetchFullMeta").mockResolvedValue(makeMeta() as never);
+    const { provenance } = await fetchProvenance("pkg", "1.0.1", PUBLIC_REGISTRY);
+    expect(provenance.attestation?.subjectIntegrity).toBeNull();
+  });
+
+  it("subjectIntegrity is returned from attestation when present", async () => {
+    vi.spyOn(attestationMod, "fetchAttestation").mockResolvedValue({
+      sourceRepo: "github.com/owner/pkg",
+      buildWorkflow: ".github/workflows/release.yml",
+      predicateType: "https://slsa.dev/provenance/v1",
+      subjectIntegrity: "sha512-abc123==",
+      sigstoreVerified: null,
+      signingIdentity: null,
+      sigstoreErrors: null,
+    });
+    vi.spyOn(client, "fetchFullMeta").mockResolvedValue(makeMeta() as never);
+    const { provenance } = await fetchProvenance("pkg", "1.0.1", PUBLIC_REGISTRY);
+    expect(provenance.attestation?.subjectIntegrity).toBe("sha512-abc123==");
   });
 });
 
