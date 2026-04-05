@@ -29,8 +29,9 @@ export interface AttestationInfo {
   sourceRepo: string | null;    // e.g. "github.com/expressjs/express"
   buildWorkflow: string | null; // e.g. ".github/workflows/release.yml"
   predicateType: string | null; // SLSA predicate URI
-  /** SRI-format sha512 of the attested tarball, from the in-toto subject digest.
-   *  e.g. "sha512-abc...". Compare against the tarball we actually downloaded. */
+  /** SRI-format digest of the attested tarball, from the in-toto subject digest.
+   *  npm uses sha512 ("sha512-abc..."); PyPI uses sha256 ("sha256-abc...").
+   *  Compare against the tarball we actually downloaded. */
   subjectIntegrity: string | null;
   /**
    * Full Sigstore chain verification result:
