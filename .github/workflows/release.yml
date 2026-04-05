@@ -1,0 +1,48 @@
+# Publishes npm-prescripts to the npm registry with Sigstore provenance attestation.
+# Triggered by pushing a version tag (v*.*.*).
+#
+# npm publish --provenance creates a Sigstore attestation automatically when
+# running in GitHub Actions — this is the signal our own scanner checks for
+# when detecting provenance regression in other packages.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+  id-token: write   # required for Sigstore OIDC attestation via npm publish --provenance
+
+jobs:
+  release:
+    name: Publish to npm
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Run tests
+        run: npm test
+
+      - name: Scan own dependencies before publish
+        run: node dist/src/index.js scan . --min-risk medium --only-flagged || true
+
+      - name: Publish with provenance attestation
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
