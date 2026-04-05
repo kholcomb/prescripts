@@ -10,7 +10,7 @@
  * PyPI's API hash representation. requirements.txt has no integrity hashes.
  */
 
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { PackageRef } from "../types.js";
 
@@ -234,8 +234,9 @@ export async function parsePipLockfile(dir: string): Promise<ParseResult | null>
     // not found
   }
 
-  // 3. requirements.txt (no hashes — fallback)
-  for (const filename of ["requirements.txt", "requirements/base.txt", "requirements/prod.txt"]) {
+  // 3. requirements.txt variants (no hashes — fallback)
+  // Check root requirements.txt first, then discover all *.txt in requirements/ directory.
+  for (const filename of await requirementsFiles(dir)) {
     try {
       const raw = await readFile(join(dir, filename), "utf-8");
       const refs = parseRequirementsTxt(raw);
@@ -251,16 +252,30 @@ export async function parsePipLockfile(dir: string): Promise<ParseResult | null>
 }
 
 /**
+ * Returns candidate requirements.txt paths to check, in preference order.
+ * Discovers all *.txt files in a requirements/ subdirectory rather than
+ * using a fixed allowlist of environment names.
+ */
+async function requirementsFiles(dir: string): Promise<string[]> {
+  const candidates: string[] = ["requirements.txt"];
+  try {
+    const entries = await readdir(join(dir, "requirements"));
+    for (const entry of entries.sort()) {
+      if (entry.endsWith(".txt")) {
+        candidates.push(`requirements/${entry}`);
+      }
+    }
+  } catch {
+    // no requirements/ directory
+  }
+  return candidates;
+}
+
+/**
  * Returns true if the directory contains a pip lockfile.
  */
 export async function hasPipLockfile(dir: string): Promise<boolean> {
-  for (const filename of [
-    "uv.lock",
-    "poetry.lock",
-    "requirements.txt",
-    "requirements/base.txt",
-    "requirements/prod.txt",
-  ]) {
+  for (const filename of ["uv.lock", "poetry.lock", ...await requirementsFiles(dir)]) {
     try {
       await readFile(join(dir, filename), "utf-8");
       return true;
