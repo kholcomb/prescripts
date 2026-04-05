@@ -38,6 +38,13 @@ export interface CratesVersionInfo {
   totalVersions: number;
   /** Upload time of the first version. */
   firstUploadTime: string | null;
+  /** crates.io login of the user who published this specific version. null if unknown. */
+  publisher: string | null;
+  /**
+   * Unique set of publisher logins for all versions published before this one,
+   * ordered by upload time. Used to compute publisherIsNewToPackage.
+   */
+  previousPublishers: string[];
 }
 
 interface CratesVersionResponse {
@@ -47,7 +54,16 @@ interface CratesVersionResponse {
     checksum: string | null;
     created_at: string;
     yanked: boolean;
+    published_by: { login: string; name: string | null } | null;
   };
+}
+
+interface CrateVersionEntry {
+  num: string;
+  created_at: string;
+  yanked: boolean;
+  checksum?: string;
+  published_by: { login: string; name: string | null } | null;
 }
 
 interface CrateResponse {
@@ -57,11 +73,14 @@ interface CrateResponse {
     created_at: string;
     versions: number[];
   };
-  versions: Array<{
-    num: string;
-    created_at: string;
-    yanked: boolean;
-    checksum?: string;
+  versions: CrateVersionEntry[];
+}
+
+interface CrateOwnersResponse {
+  users: Array<{
+    login: string;
+    kind: string;
+    name: string | null;
   }>;
 }
 
@@ -101,6 +120,8 @@ export async function fetchCratesMeta(
   // Find the specific version in the versions array (avoids a second request)
   const versionEntry = pkgData.versions?.find((v) => v.num === resolvedVersion);
 
+  const allVersions = pkgData.versions ?? [];
+
   if (!versionEntry) {
     // Fall back to version-specific endpoint if not in the list
     const verUrl = `${CRATES_BASE}/${encodeURIComponent(name)}/${encodeURIComponent(resolvedVersion)}`;
@@ -111,8 +132,10 @@ export async function fetchCratesMeta(
       checksum: verData.version.checksum,
       created_at: verData.version.created_at,
       yanked: verData.version.yanked,
-      totalVersions: pkgData.versions?.length ?? 1,
+      published_by: verData.version.published_by,
+      totalVersions: allVersions.length || 1,
       firstCreatedAt: pkgData.crate.created_at,
+      allVersions,
     });
   }
 
@@ -120,8 +143,10 @@ export async function fetchCratesMeta(
     checksum: versionEntry.checksum ?? null,
     created_at: versionEntry.created_at,
     yanked: versionEntry.yanked,
-    totalVersions: pkgData.versions?.length ?? 1,
+    published_by: versionEntry.published_by,
+    totalVersions: allVersions.length || 1,
     firstCreatedAt: pkgData.crate.created_at,
+    allVersions,
   });
 }
 
@@ -132,11 +157,24 @@ function buildVersionInfo(
     checksum: string | null | undefined;
     created_at: string;
     yanked: boolean;
+    published_by: { login: string; name: string | null } | null;
     totalVersions: number;
     firstCreatedAt: string;
+    allVersions: CrateVersionEntry[];
   }
 ): CratesVersionInfo {
   const downloadUrl = `${STATIC_BASE}/${encodeURIComponent(name)}/${encodeURIComponent(name)}-${encodeURIComponent(version)}.crate`;
+
+  const publisher = data.published_by?.login ?? null;
+
+  // Collect unique publishers for all versions older than the current one
+  const previousPublishers = Array.from(new Set(
+    data.allVersions
+      .filter((v) => v.num !== version && v.created_at < data.created_at)
+      .map((v) => v.published_by?.login)
+      .filter((login): login is string => typeof login === "string")
+  ));
+
   return {
     downloadUrl,
     sha256: data.checksum ? `sha256:${data.checksum}` : null,
@@ -144,7 +182,24 @@ function buildVersionInfo(
     yanked: data.yanked,
     totalVersions: data.totalVersions,
     firstUploadTime: data.firstCreatedAt ?? null,
+    publisher,
+    previousPublishers,
   };
+}
+
+/**
+ * Fetch the current owner logins for a crate.
+ * Returns an empty array on any failure (owners are best-effort).
+ */
+export async function fetchCratesOwners(name: string): Promise<string[]> {
+  const data = (await fetchCratesJson(
+    `${CRATES_BASE}/${encodeURIComponent(name)}/owners`
+  )) as CrateOwnersResponse | null;
+
+  if (!Array.isArray(data?.users)) return [];
+  return data.users
+    .map((u) => u.login)
+    .filter((login): login is string => typeof login === "string");
 }
 
 /**

@@ -37,6 +37,7 @@ import { fetchOsvAdvisories } from "../registry/osv-client.js";
 import {
   fetchCratesMeta,
   fetchCrateBytes,
+  fetchCratesOwners,
   resolveCratesLatestVersion,
 } from "../registry/cratesio-client.js";
 
@@ -181,7 +182,10 @@ export class CargoPlugin implements EcosystemPlugin {
   }
 
   async fetchProvenance(ref: PackageRef, _opts: ScanOptions): Promise<ProvenanceFetchResult> {
-    const meta = await fetchCratesMeta(ref.name, ref.version);
+    const [meta, owners] = await Promise.all([
+      fetchCratesMeta(ref.name, ref.version),
+      fetchCratesOwners(ref.name),
+    ]);
 
     if (!meta) {
       return {
@@ -192,21 +196,35 @@ export class CargoPlugin implements EcosystemPlugin {
       };
     }
 
+    const publisher = meta.publisher;
+
+    // Is the publisher currently an owner of this crate?
+    const publisherInMaintainers =
+      publisher !== null && owners.length > 0
+        ? owners.includes(publisher)
+        : null;
+
+    // Has this publisher ever published this crate before?
+    const publisherIsNewToPackage =
+      publisher !== null
+        ? !meta.previousPublishers.includes(publisher)
+        : null;
+
     const provenance: ProvenanceInfo = {
       publishedAt: meta.uploadTime,
       weeklyDownloads: null,       // crates.io has total downloads, not weekly
-      maintainerCount: null,       // not easily available from API
-      installScriptIsNew: null,    // would require comparing with previous version
+      maintainerCount: owners.length > 0 ? owners.length : null,
+      installScriptIsNew: null,
       totalVersions: meta.totalVersions,
       unavailableReason: null,
       attestation: null,           // crates.io does not have Sigstore attestations
       deprecated: meta.yanked ? "Yanked from crates.io" : null,
-      publisher: null,             // crates.io requires auth to get publisher info
-      publisherInMaintainers: null,
+      publisher,
+      publisherInMaintainers,
       hasRegistrySignature: null,  // crates.io does not sign packages
       attestationRegressed: null,
       firstPublishedAt: meta.firstUploadTime,
-      publisherIsNewToPackage: null,
+      publisherIsNewToPackage,
     };
 
     return {
