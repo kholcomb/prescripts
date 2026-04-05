@@ -18,7 +18,8 @@ import type { DiskCache } from "../cache/disk-cache.js";
 import type { EcosystemPlugin, ExtractionResult } from "./types.js";
 import { parsePipLockfile, hasPipLockfile } from "../lockfile/pip-parser.js";
 import { extractPythonPackage } from "../extractor/python-tarball.js";
-import { fetchPyPIMeta, resolvePyPILatestVersion } from "../registry/pypi-client.js";
+import { fetchPyPIMeta, fetchPyPIProvenance, resolvePyPILatestVersion } from "../registry/pypi-client.js";
+import { parsePyPIAttestation } from "../registry/pypi-attestation.js";
 import { extractPythonHooks, hasPythonHooks } from "../analyzer/python-hooks.js";
 import { fetchOsvAdvisories } from "../registry/osv-client.js";
 
@@ -132,6 +133,15 @@ export class PipPlugin implements EcosystemPlugin {
       };
     }
 
+    // Fetch PEP 740 attestation using the filename from the selected tarball/wheel URL.
+    // fetchPyPIProvenance short-circuits to null on private indexes — safe to always call.
+    const filename = meta.tarballUrl.split("/").pop() ?? "";
+    const attestation = filename
+      ? await parsePyPIAttestation(
+          await fetchPyPIProvenance(ref.name, ref.version, filename)
+        )
+      : null;
+
     const provenance: ProvenanceInfo = {
       publishedAt: meta.uploadTime,
       weeklyDownloads: null,           // requires pypistats.org — not fetched
@@ -139,12 +149,13 @@ export class PipPlugin implements EcosystemPlugin {
       installScriptIsNew: null,        // would require comparing with previous version
       totalVersions: meta.totalVersions,
       unavailableReason: null,
-      attestation: null,               // PyPI does not yet support Sigstore attestations
+      attestation,
       deprecated: meta.yanked ? (meta.yankedReason ?? "Yanked from PyPI") : null,
-      publisher: meta.maintainer ?? meta.author ?? null,
+      // Prefer OIDC-verified source repo from attestation over free-text package metadata
+      publisher: attestation?.sourceRepo ?? meta.maintainer ?? meta.author ?? null,
       publisherInMaintainers: null,    // no maintainer list in PyPI API
       hasRegistrySignature: null,      // PyPI does not sign packages with ECDSA
-      attestationRegressed: null,      // no attestations on PyPI
+      attestationRegressed: null,      // populated in segment 4
       firstPublishedAt: meta.firstUploadTime,
       publisherIsNewToPackage: null,
     };
