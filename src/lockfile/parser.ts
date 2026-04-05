@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { PackageRef } from "../types.js";
+import { findWorkspaceRoot } from "./workspace.js";
 
 interface LockfileV1Dep {
   version: string;
@@ -51,10 +52,18 @@ function nameFromPackagePath(pkgPath: string): string {
   return last ?? pkgPath;
 }
 
-export async function parseLockfile(dir: string): Promise<PackageRef[]> {
+export interface ParseResult {
+  refs: PackageRef[];
+  /** The directory where the lockfile was actually found (may differ from `dir` in a workspace). */
+  lockfileDir: string;
+}
+
+export async function parseLockfile(dir: string): Promise<ParseResult> {
   // npm-shrinkwrap.json takes precedence over package-lock.json when both exist
   // (mirrors npm's own resolution order)
   let raw: string | undefined;
+  let lockfileDir = dir;
+
   for (const filename of ["npm-shrinkwrap.json", "package-lock.json"]) {
     try {
       raw = await readFile(join(dir, filename), "utf-8");
@@ -63,6 +72,23 @@ export async function parseLockfile(dir: string): Promise<PackageRef[]> {
       // try next
     }
   }
+
+  // Not found in `dir` — walk up to find a workspace root
+  if (!raw) {
+    const wsRoot = await findWorkspaceRoot(dir);
+    if (wsRoot && wsRoot !== dir) {
+      for (const filename of ["npm-shrinkwrap.json", "package-lock.json"]) {
+        try {
+          raw = await readFile(join(wsRoot, filename), "utf-8");
+          lockfileDir = wsRoot;
+          break;
+        } catch {
+          // try next
+        }
+      }
+    }
+  }
+
   if (!raw) {
     throw new Error(
       `No package-lock.json or npm-shrinkwrap.json found in ${dir}. ` +
@@ -96,5 +122,5 @@ export async function parseLockfile(dir: string): Promise<PackageRef[]> {
     collectV1(lockfile.dependencies, seen);
   }
 
-  return Array.from(seen.values());
+  return { refs: Array.from(seen.values()), lockfileDir };
 }

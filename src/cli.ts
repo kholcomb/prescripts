@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import pLimit from "p-limit";
 import { parseLockfile } from "./lockfile/parser.js";
+import { readWorkspacePatterns } from "./lockfile/workspace.js";
 import { fetchAndExtract } from "./extractor/index.js";
 import { fetchProvenance } from "./registry/metadata.js";
 import { extractLifecycleScripts, hasLifecycleScripts, extractBinaryField } from "./analyzer/lifecycle.js";
@@ -202,7 +203,16 @@ export async function runScan(dir: string, opts: ScanOptions): Promise<number> {
   };
 
   const cache = new DiskCache(mergedOpts.cacheDir);
-  const refs = await parseLockfile(projectDir);
+  const { refs, lockfileDir } = await parseLockfile(projectDir);
+
+  // Notify when the lockfile was found in a parent workspace root
+  if (lockfileDir !== projectDir) {
+    const wsPatterns = await readWorkspacePatterns(lockfileDir);
+    const wsNote = wsPatterns.length > 0
+      ? ` (workspace: ${wsPatterns.join(", ")})`
+      : "";
+    process.stderr.write(`Using workspace root lockfile: ${lockfileDir}${wsNote}\n`);
+  }
 
   // Batch advisory lookup — one request for all packages before the scan loop
   const advisoryMap = await fetchAdvisories(refs, mergedOpts.registry);
@@ -217,7 +227,7 @@ export async function runScan(dir: string, opts: ScanOptions): Promise<number> {
     refs.map((ref) =>
       limit(async () => {
         try {
-          const report = await scanRef(ref, mergedOpts, cache, projectDir, advisoryMap);
+          const report = await scanRef(ref, mergedOpts, cache, lockfileDir, advisoryMap);
           if (report) reports.push(report);
         } catch (err) {
           if (mergedOpts.verbose) {
@@ -515,8 +525,8 @@ export async function runFix(dir: string, opts: ScanOptions, apply: boolean): Pr
   };
 
   const cache = new DiskCache(mergedOpts.cacheDir);
-  const refs = await parseLockfile(projectDir);
-  const directDeps = await readDirectDeps(projectDir);
+  const { refs, lockfileDir } = await parseLockfile(projectDir);
+  const directDeps = await readDirectDeps(lockfileDir);
   const advisoryMap = await fetchAdvisories(refs, mergedOpts.registry);
 
   const limit = pLimit(opts.concurrency);
@@ -601,7 +611,7 @@ export async function runFix(dir: string, opts: ScanOptions, apply: boolean): Pr
   const installArgs = candidates.map((c) => `${c.name}@${c.patchedVersions}`);
   process.stdout.write(`\n${cc(BOLD, "Running:")} npm install ${installArgs.join(" ")}\n\n`);
 
-  const code = await spawnNpmInstall(installArgs, projectDir);
+  const code = await spawnNpmInstall(installArgs, lockfileDir);
   if (code !== 0) {
     process.stderr.write(`npm install exited with code ${code}\n`);
     return 2;

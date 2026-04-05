@@ -9,7 +9,7 @@ const FIXTURES = join(__dirname, "fixtures");
 
 describe("parseLockfile", () => {
   it("parses v3 lockfile and returns all packages", async () => {
-    const refs = await parseLockfile(join(FIXTURES, "project-v3"));
+    const { refs, lockfileDir } = await parseLockfile(join(FIXTURES, "project-v3"));
     expect(refs.length).toBeGreaterThan(0);
     expect(refs.some((r) => r.name === "clean-pkg")).toBe(true);
     expect(refs.some((r) => r.name === "@scope/scoped-pkg")).toBe(true);
@@ -18,6 +18,8 @@ describe("parseLockfile", () => {
     expect(refs.some((r) => r.name === "local-dep")).toBe(true);
     // root entry (empty string key) excluded
     expect(refs.every((r) => r.name !== "")).toBe(true);
+    // lockfileDir should match the fixture dir
+    expect(lockfileDir).toBe(join(FIXTURES, "project-v3"));
   });
 
   it("parses v1 lockfile including nested dependencies", async () => {
