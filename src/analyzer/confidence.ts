@@ -89,10 +89,16 @@ export function scoreFindings(
     if (ALWAYS_HIGH_CONFIDENCE.has(f.category)) {
       return { ...f, confidence: "high" as Confidence };
     }
-    // provenance_regression is always at least medium
+    // provenance_regression floor: only relax to "low" when publisher identity
+    // and signing infrastructure both check out. Popularity/version count are
+    // intentionally excluded — high-value targets are exactly what threat actors
+    // target, so those signals don't reduce suspicion here.
     if (f.category === "provenance_regression") {
       const c = scoreToConfidence(pScore, false);
-      return { ...f, confidence: c === "low" ? "medium" : c };
+      const publisherKnown = provenance.publisherInMaintainers !== false;
+      const infraSigned = provenance.hasRegistrySignature === true;
+      const canDropFloor = publisherKnown && infraSigned;
+      return { ...f, confidence: c === "low" && !canDropFloor ? "medium" : c };
     }
     const isHighNoise = HIGH_NOISE_CATEGORIES.has(f.category);
     return { ...f, confidence: scoreToConfidence(pScore, isHighNoise) };
