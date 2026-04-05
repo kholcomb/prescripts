@@ -1,10 +1,14 @@
 import { Command } from "commander";
 import pLimit from "p-limit";
 import { parseLockfile } from "./lockfile/parser.js";
+import { parsePipLockfile, hasPipLockfile } from "./lockfile/pip-parser.js";
 import { readWorkspacePatterns } from "./lockfile/workspace.js";
 import { fetchAndExtract } from "./extractor/index.js";
+import { extractPythonPackage } from "./extractor/python-tarball.js";
 import { fetchProvenance } from "./registry/metadata.js";
+import { fetchPyPIMeta, resolvePyPILatestVersion } from "./registry/pypi-client.js";
 import { extractLifecycleScripts, hasLifecycleScripts, extractBinaryField } from "./analyzer/lifecycle.js";
+import { extractPythonHooks, hasPythonHooks } from "./analyzer/python-hooks.js";
 import { scanPackage } from "./analyzer/scanner.js";
 import { DiskCache } from "./cache/disk-cache.js";
 import { resolveTree } from "./resolver/package-tree.js";
@@ -18,8 +22,9 @@ import {
 import { setRegistryConcurrency } from "./registry/rate-limiter.js";
 import { fetchAdvisories } from "./registry/advisory.js";
 import { scoreFindings, applyBinaryDownloaderCluster, computeRisk } from "./analyzer/confidence.js";
+import { verifyRegistrySignature } from "./registry/signature-verify.js";
 import { loadConfig } from "./config.js";
-import type { PackageReport, PackageRef, ScanOptions, Severity, Finding, AdvisoryMatch, LifecycleScripts, RiskLevel } from "./types.js";
+import type { PackageReport, PackageRef, ProvenanceInfo, ScanOptions, Severity, Finding, AdvisoryMatch, LifecycleScripts, RiskLevel } from "./types.js";
 import { writeFile, readFile, mkdir, access } from "node:fs/promises";
 import { resolve, join } from "node:path";
 import { spawn } from "node:child_process";
@@ -48,6 +53,7 @@ async function scanRef(
   let fileMap: Map<string, string>;
   let sourceType;
   let integrityVerified = false;
+  let computedIntegrity: string | null = null;
 
   if (!opts.noCache) {
     const cached = await cache.read(ref.name, ref.integrity, ref.version);
@@ -56,12 +62,15 @@ async function scanRef(
       fileMap = cached.extracted.fileMap;
       sourceType = cached.meta.sourceType;
       integrityVerified = ref.integrity !== null;
+      // When served from cache, the integrity was already verified on first download
+      computedIntegrity = ref.integrity ?? null;
     } else {
       const result = await fetchAndExtract(ref, projectDir, opts.registry);
       packageJson = result.extracted.packageJson;
       fileMap = result.extracted.fileMap;
       sourceType = result.sourceType;
       integrityVerified = result.integrityVerified;
+      computedIntegrity = result.computedIntegrity;
       await cache.write(ref.name, ref.version, ref.integrity, sourceType, result.extracted);
     }
   } else {
@@ -70,6 +79,7 @@ async function scanRef(
     fileMap = result.extracted.fileMap;
     sourceType = result.sourceType;
     integrityVerified = result.integrityVerified;
+    computedIntegrity = result.computedIntegrity;
   }
 
   const lifecycleScripts = extractLifecycleScripts(packageJson);
@@ -84,11 +94,12 @@ async function scanRef(
     return null; // nothing to report
   }
 
-  const { provenance, registryManifestScripts } = await fetchProvenance(
-    ref.name,
-    ref.version,
-    opts.registry
-  );
+  const {
+    provenance,
+    registryManifestScripts,
+    registryIntegrity,
+    registrySignatures,
+  } = await fetchProvenance(ref.name, ref.version, opts.registry);
   const { findings: patternFindings } = scanPackage(lifecycleScripts, fileMap, opts.severity);
 
   const findings: Finding[] = [...patternFindings];
@@ -151,6 +162,95 @@ async function scanRef(
     });
   }
 
+  // --- Lockfile poisoning: lockfile integrity ≠ registry dist.integrity ---
+  // Detects: attacker modifies lockfile hash to match a tampered tarball.
+  // The registry still holds the original hash — they diverge.
+  if (ref.integrity && registryIntegrity && ref.integrity !== registryIntegrity) {
+    findings.unshift({
+      scriptHook: null,
+      source: "lockfile vs. registry integrity",
+      category: "lockfile_poisoning",
+      severity: "critical",
+      confidence: "high",
+      pattern: "lockfile integrity hash does not match registry dist.integrity",
+      excerpt: {
+        _warning: "UNTRUSTED THIRD-PARTY CONTENT",
+        lines: `lockfile:  ${ref.integrity}\nregistry:  ${registryIntegrity}`,
+      },
+    });
+  }
+
+  // --- npm ECDSA registry signature verification ---
+  // Detects: tampered tarball or MITM — attacker cannot re-sign with npm's private key.
+  if (registryIntegrity && registrySignatures && sourceType === "registry") {
+    const sigValid = await verifyRegistrySignature(
+      ref.name,
+      ref.version,
+      registryIntegrity,
+      registrySignatures,
+      opts.registry
+    );
+    if (sigValid === false) {
+      findings.unshift({
+        scriptHook: null,
+        source: "npm registry ECDSA signature",
+        category: "signature_invalid",
+        severity: "critical",
+        confidence: "high",
+        pattern: "registry signature verification failed",
+        excerpt: {
+          _warning: "UNTRUSTED THIRD-PARTY CONTENT",
+          lines:
+            "The npm registry ECDSA signature for this package did not verify.\n" +
+            "This may indicate a tampered package or MITM between client and registry.",
+        },
+      });
+    }
+  }
+
+  // --- Attestation subject verification ---
+  // Detects: attestation substitution — using package A's attestation for package B's tarball.
+  if (
+    provenance.attestation?.subjectIntegrity &&
+    computedIntegrity &&
+    provenance.attestation.subjectIntegrity !== computedIntegrity
+  ) {
+    findings.unshift({
+      scriptHook: null,
+      source: "Sigstore attestation subject",
+      category: "attestation_subject_mismatch",
+      severity: "critical",
+      confidence: "high",
+      pattern: "attested tarball hash does not match downloaded tarball",
+      excerpt: {
+        _warning: "UNTRUSTED THIRD-PARTY CONTENT",
+        lines:
+          `attested:   ${provenance.attestation.subjectIntegrity}\n` +
+          `downloaded: ${computedIntegrity}`,
+      },
+    });
+  }
+
+  // --- Sigstore chain verification failure ---
+  // Detects: fabricated attestation bundle (self-signed cert, forged Rekor SET,
+  //          invalid Merkle proof). sigstoreVerified === false means crypto
+  //          definitively failed; null means could not verify (not a finding).
+  if (provenance.attestation?.sigstoreVerified === false) {
+    const errorSummary = (provenance.attestation.sigstoreErrors ?? []).join("; ");
+    findings.unshift({
+      scriptHook: null,
+      source: "Sigstore bundle verification",
+      category: "attestation_invalid",
+      severity: "critical",
+      confidence: "high",
+      pattern: "Sigstore chain verification failed",
+      excerpt: {
+        _warning: "UNTRUSTED THIRD-PARTY CONTENT",
+        lines: errorSummary || "One or more verification checks failed.",
+      },
+    });
+  }
+
   // Post-process findings: cluster detection → confidence scoring → risk
   const clustered = applyBinaryDownloaderCluster(findings, binaryDownload);
   const scored = scoreFindings(clustered, provenance, opts.trust);
@@ -172,6 +272,252 @@ async function scanRef(
     findings: scored,
     risk,
   };
+}
+
+// ── Python (pip/PyPI) scan path ───────────────────────────────────────────────
+
+/**
+ * Builds a ProvenanceInfo from PyPI metadata.
+ * Maps PyPI fields to the generic ProvenanceInfo shape; npm-specific fields are null.
+ */
+async function fetchPyPIProvenance(name: string, version: string): Promise<{
+  provenance: ProvenanceInfo;
+  registryIntegrity: string | null;
+}> {
+  const meta = await fetchPyPIMeta(name, version);
+
+  if (!meta) {
+    return {
+      provenance: {
+        publishedAt: null,
+        weeklyDownloads: null,
+        maintainerCount: null,
+        installScriptIsNew: null,
+        totalVersions: null,
+        unavailableReason: "PyPI metadata unavailable",
+        attestation: null,
+        deprecated: null,
+        publisher: null,
+        publisherInMaintainers: null,
+        hasRegistrySignature: null,
+        attestationRegressed: null,
+        firstPublishedAt: null,
+        publisherIsNewToPackage: null,
+      },
+      registryIntegrity: null,
+    };
+  }
+
+  const provenance: ProvenanceInfo = {
+    publishedAt: meta.uploadTime,
+    weeklyDownloads: null,           // requires pypistats.org — skip for now
+    maintainerCount: null,           // PyPI has author/maintainer as strings, not arrays
+    installScriptIsNew: null,        // would require comparing with prev version
+    totalVersions: meta.totalVersions,
+    unavailableReason: null,
+    attestation: null,               // PyPI doesn't have Sigstore attestations yet
+    deprecated: meta.yanked ? (meta.yankedReason ?? "Yanked from PyPI") : null,
+    publisher: meta.maintainer ?? meta.author ?? null,
+    publisherInMaintainers: null,    // no maintainer list in PyPI API
+    hasRegistrySignature: null,      // PyPI doesn't sign packages with ECDSA
+    attestationRegressed: null,      // no attestations on PyPI
+    firstPublishedAt: meta.firstUploadTime,
+    publisherIsNewToPackage: null,
+  };
+
+  return { provenance, registryIntegrity: meta.sha256 };
+}
+
+async function scanPipRef(
+  ref: PackageRef,
+  opts: ScanOptions,
+  cache: DiskCache
+): Promise<PackageReport | null> {
+  let fileMap: Map<string, string>;
+  let packageJson: Record<string, unknown>;
+  let integrityVerified = false;
+  let computedIntegrity: string | null = null;
+
+  // Resolve tarball URL from PyPI if not already in the ref
+  let tarballUrl = ref.resolved;
+  let expectedIntegrity = ref.integrity;
+
+  if (!tarballUrl) {
+    const meta = await fetchPyPIMeta(ref.name, ref.version);
+    if (!meta) {
+      if (opts.verbose) {
+        process.stderr.write(`\nPyPI: no metadata for ${ref.name}@${ref.version}\n`);
+      }
+      return null;
+    }
+    tarballUrl = meta.tarballUrl;
+    expectedIntegrity = expectedIntegrity ?? meta.sha256;
+  }
+
+  // Check cache (keyed by integrity hash if available, else by name@version)
+  const cacheKey = expectedIntegrity ?? ref.version;
+  if (!opts.noCache) {
+    const cached = await cache.read(ref.name, cacheKey, ref.version);
+    if (cached) {
+      packageJson = cached.extracted.packageJson;
+      fileMap = cached.extracted.fileMap;
+      integrityVerified = expectedIntegrity !== null;
+      computedIntegrity = expectedIntegrity;
+    } else {
+      const result = await extractPythonPackage(tarballUrl, expectedIntegrity, opts.timeout);
+      packageJson = result.extracted.packageJson;
+      fileMap = result.extracted.fileMap;
+      integrityVerified = result.integrityVerified;
+      computedIntegrity = result.computedIntegrity;
+      await cache.write(ref.name, ref.version, cacheKey, "registry", result.extracted);
+    }
+  } else {
+    const result = await extractPythonPackage(tarballUrl, expectedIntegrity, opts.timeout);
+    packageJson = result.extracted.packageJson;
+    fileMap = result.extracted.fileMap;
+    integrityVerified = result.integrityVerified;
+    computedIntegrity = result.computedIntegrity;
+  }
+
+  const pythonHooks = extractPythonHooks(fileMap);
+
+  // For Python, skip packages with no install hooks and no advisories
+  if (!hasPythonHooks(pythonHooks)) {
+    return null;
+  }
+
+  const { provenance, registryIntegrity } = await fetchPyPIProvenance(ref.name, ref.version);
+  const { findings: patternFindings } = scanPackage(pythonHooks, fileMap, opts.severity);
+  const findings: Finding[] = [...patternFindings];
+
+  // --- Integrity mismatch (PyPI sha256 vs. computed sha256) ---
+  if (ref.integrity && !integrityVerified) {
+    findings.unshift({
+      scriptHook: null,
+      source: "tarball integrity check",
+      category: "integrity_mismatch",
+      severity: "critical",
+      confidence: "medium",
+      pattern: "sha256 hash mismatch",
+      excerpt: {
+        _warning: "UNTRUSTED THIRD-PARTY CONTENT",
+        lines: `Expected: ${ref.integrity}\nActual hash did not match.`,
+      },
+    });
+  }
+
+  // --- Lockfile poisoning: poetry.lock sha256 ≠ PyPI sha256 ---
+  if (ref.integrity && registryIntegrity && ref.integrity !== registryIntegrity) {
+    findings.unshift({
+      scriptHook: null,
+      source: "lockfile vs. PyPI integrity",
+      category: "lockfile_poisoning",
+      severity: "critical",
+      confidence: "high",
+      pattern: "lockfile sha256 does not match PyPI release sha256",
+      excerpt: {
+        _warning: "UNTRUSTED THIRD-PARTY CONTENT",
+        lines: `lockfile: ${ref.integrity}\nPyPI:     ${registryIntegrity}`,
+      },
+    });
+  }
+
+  const scored = scoreFindings(findings, provenance, opts.trust);
+  const risk = computeRisk(scored, [], provenance);
+
+  return {
+    name: ref.name,
+    version: ref.version,
+    packageManager: "pip",
+    source: {
+      type: "registry",
+      resolved: tarballUrl,
+      integrity: ref.integrity,
+      integrityVerified,
+    },
+    provenance,
+    lifecycleScripts: pythonHooks,
+    binaryDownload: null,
+    advisories: [],
+    findings: scored,
+    risk,
+  };
+}
+
+export async function runPipCheck(packageSpec: string, opts: ScanOptions): Promise<number> {
+  // Parse "requests@2.28.0" or "requests" (latest)
+  const atIdx = packageSpec.lastIndexOf("@");
+  let name: string;
+  let version: string;
+  if (atIdx > 0) {
+    name = packageSpec.slice(0, atIdx);
+    version = packageSpec.slice(atIdx + 1);
+  } else {
+    name = packageSpec;
+    version = "latest";
+  }
+
+  if (version === "latest") {
+    const resolved = await resolvePyPILatestVersion(name);
+    if (!resolved) {
+      process.stderr.write(`pip: package "${name}" not found on PyPI\n`);
+      return 2;
+    }
+    version = resolved;
+  }
+
+  const cache = new DiskCache(opts.cacheDir);
+  const ref: PackageRef = { name, version, resolved: "", integrity: null };
+  const report = await scanPipRef(ref, opts, cache);
+  if (!report) {
+    const project = buildProjectReport([], "check", false, opts.minRisk);
+    await writeOutput(project, opts);
+    return 0;
+  }
+
+  const project = buildProjectReport([report], "check", opts.onlyFlagged, opts.minRisk);
+  await writeOutput(project, opts);
+  return project.flaggedPackages > 0 ? 1 : 0;
+}
+
+export async function runPipScan(dir: string, opts: ScanOptions): Promise<number> {
+  const projectDir = resolve(dir);
+
+  const parsed = await parsePipLockfile(projectDir);
+  if (!parsed) {
+    process.stderr.write("No pip lockfile found (requirements.txt or poetry.lock)\n");
+    return 2;
+  }
+
+  const { refs } = parsed;
+  const cache = new DiskCache(opts.cacheDir);
+  const limit = pLimit(opts.concurrency);
+  let completed = 0;
+  const total = refs.length;
+  const reports: PackageReport[] = [];
+
+  await Promise.all(
+    refs.map((ref) =>
+      limit(async () => {
+        try {
+          const report = await scanPipRef(ref, opts, cache);
+          if (report) reports.push(report);
+        } catch (err) {
+          if (opts.verbose) {
+            process.stderr.write(`\nError scanning ${ref.name}@${ref.version}: ${String(err)}\n`);
+          }
+        } finally {
+          completed++;
+          renderProgress(completed, total, `${ref.name}@${ref.version} (pip)`);
+        }
+      })
+    )
+  );
+
+  clearProgress();
+  const project = buildProjectReport(reports, "scan", opts.onlyFlagged, opts.minRisk);
+  await writeOutput(project, opts);
+  return project.flaggedPackages > 0 ? 1 : 0;
 }
 
 export async function scanSinglePackage(
@@ -205,6 +551,23 @@ export async function runScan(dir: string, opts: ScanOptions): Promise<number> {
     trust: opts.trust ?? fileConfig.trust,
     minRisk: opts.minRisk ?? fileConfig.minRisk,
   };
+
+  // Auto-detect pip lockfiles and run Python scan alongside npm scan
+  const pipFound = await hasPipLockfile(projectDir);
+  if (pipFound) {
+    process.stderr.write("Detected pip lockfile (requirements.txt / poetry.lock) — running Python scan\n");
+    const pipExit = await runPipScan(projectDir, mergedOpts);
+    // If only pip lockfile (no npm lockfile), return pip exit code
+    try {
+      await import("node:fs/promises").then((m) => m.access(join(projectDir, "package-lock.json")));
+    } catch {
+      try {
+        await import("node:fs/promises").then((m) => m.access(join(projectDir, "npm-shrinkwrap.json")));
+      } catch {
+        return pipExit;
+      }
+    }
+  }
 
   const cache = new DiskCache(mergedOpts.cacheDir);
   const { refs, lockfileDir } = await parseLockfile(projectDir);
@@ -641,14 +1004,22 @@ fi
 
 echo "npm-prescripts: lockfile changed — scanning dependencies..."
 
-if ! command -v npm-prescripts >/dev/null 2>&1; then
-  # Fall back to local install
-  NPX_CMD="npx --no npm-prescripts"
+# Resolve npm-prescripts binary — never use npx (downloads from registry without scanning)
+if command -v npm-prescripts >/dev/null 2>&1; then
+  PRESCRIPTS_CMD="npm-prescripts"
+elif [ -x "./node_modules/.bin/npm-prescripts" ]; then
+  PRESCRIPTS_CMD="./node_modules/.bin/npm-prescripts"
 else
-  NPX_CMD="npm-prescripts"
+  echo ""
+  echo "npm-prescripts: binary not found. Cannot scan dependencies before committing."
+  echo "  Install globally:     npm install -g npm-prescripts"
+  echo "  Or as devDependency:  npm install --save-dev npm-prescripts"
+  echo "  Do not use npx — it downloads from the registry without scanning."
+  echo "  To bypass this check: git commit --no-verify"
+  exit 1
 fi
 
-$NPX_CMD scan --min-risk ${minRisk} --only-flagged
+$PRESCRIPTS_CMD scan --min-risk ${minRisk} --only-flagged
 STATUS=$?
 
 if [ $STATUS -ne 0 ]; then
@@ -775,12 +1146,21 @@ export function buildProgram(): Command {
   sharedOptions(
     program
       .command("check <package>")
-      .description("Scan a package before installing (e.g. check express@4.18.2)")
+      .description(
+        "Scan a package before installing (e.g. check express@4.18.2)\n" +
+        "Use --pm pip to scan a PyPI package (e.g. check requests@2.28.0 --pm pip)"
+      )
       .option("--depth <n>", "Max dependency resolution depth", "5")
-  ).action(async (pkg: string, opts: CliScanOptions) => {
+      .option("--pm <manager>", "Package manager: npm|pip (default: npm)", "npm")
+  ).action(async (pkg: string, opts: CliScanOptions & { pm: string }) => {
     try {
-      const code = await runCheck(pkg, parseOpts(opts));
-      process.exit(code);
+      if (opts.pm === "pip") {
+        const code = await runPipCheck(pkg, parseOpts(opts));
+        process.exit(code);
+      } else {
+        const code = await runCheck(pkg, parseOpts(opts));
+        process.exit(code);
+      }
     } catch (err) {
       process.stderr.write(`Error: ${String(err)}\n`);
       process.exit(2);

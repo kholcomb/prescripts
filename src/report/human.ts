@@ -81,6 +81,8 @@ function renderPackage(pkg: PackageReport): string {
     ? c(YELLOW, `[${pkg.source.type.toUpperCase()}]`) + " "
     : "";
 
+  const pmBadge = pkg.packageManager === "pip" ? c(DIM, "[pip]") + " " : "";
+
   const integrityBadge = pkg.source.integrity && !pkg.source.integrityVerified
     ? c(RED + BOLD, "[INTEGRITY MISMATCH]") + " "
     : "";
@@ -99,11 +101,21 @@ function renderPackage(pkg: PackageReport): string {
     ? c(DIM, `[no provenance: ${provenance.unavailableReason}]`) + " "
     : "";
 
-  const attestationBadge = provenance.attestation
-    ? c(GREEN, `[provenance: ${provenance.attestation.sourceRepo ?? "verified"}]`) + " "
-    : provenance.unavailableReason
-    ? ""
-    : c(DIM, "[no provenance attestation]") + " ";
+  const attestationBadge = (() => {
+    if (!provenance.attestation) {
+      return provenance.unavailableReason ? "" : c(DIM, "[no provenance attestation]") + " ";
+    }
+    const { sigstoreVerified, signingIdentity, sourceRepo } = provenance.attestation;
+    const label = signingIdentity ?? sourceRepo ?? "attested";
+    if (sigstoreVerified === true) {
+      return c(GREEN, `[chain-verified: ${label}]`) + " ";
+    }
+    if (sigstoreVerified === false) {
+      return c(RED + BOLD, `[ATTESTATION INVALID: ${label}]`) + " ";
+    }
+    // null = parsed but not cryptographically verified
+    return c(GREEN, `[provenance: ${label}]`) + " ";
+  })();
 
   const deprecatedBadge = provenance.deprecated
     ? c(RED + BOLD, `[DEPRECATED: ${provenance.deprecated}]`) + " "
@@ -123,11 +135,28 @@ function renderPackage(pkg: PackageReport): string {
       ? c(DIM, `[publisher: ${provenance.publisher}]`) + " "
       : "";
 
+  const newPublisherBadge =
+    provenance.publisherIsNewToPackage === true
+      ? c(YELLOW, "[new publisher for this package]") + " "
+      : "";
+
+  const velocityBadge = (() => {
+    const { firstPublishedAt, publishedAt, totalVersions } = provenance;
+    if (!firstPublishedAt || !publishedAt || (totalVersions ?? 0) < 5) return "";
+    const ageDays =
+      (new Date(publishedAt).getTime() - new Date(firstPublishedAt).getTime()) /
+      (1000 * 60 * 60 * 24);
+    const velocity = (totalVersions ?? 1) / Math.max(1, ageDays);
+    if (velocity > 10) return c(YELLOW, `[${(velocity).toFixed(0)} versions/day]`) + " ";
+    if (velocity > 3) return c(DIM, `[${(velocity).toFixed(1)} versions/day]`) + " ";
+    return "";
+  })();
+
   lines.push(
     `\n${c(BOLD, `${pkg.name}@${pkg.version}`)}  ${riskBadge}  ` +
-    srcBadge + integrityBadge + deprecatedBadge + newScript +
-    maintainers + downloads + sigBadge + publisherBadge +
-    noProvenance + attestationBadge
+    pmBadge + srcBadge + integrityBadge + deprecatedBadge + newScript +
+    maintainers + downloads + sigBadge + publisherBadge + newPublisherBadge +
+    velocityBadge + noProvenance + attestationBadge
   );
 
   for (const [hook, script] of Object.entries(pkg.lifecycleScripts)) {
