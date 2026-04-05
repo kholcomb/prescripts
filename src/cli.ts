@@ -7,6 +7,7 @@ import { renderReport, renderProgress, clearProgress } from "./report/human.js";
 import { toSarif } from "./report/sarif.js";
 import { parseLockfile } from "./lockfile/parser.js";
 import { detectEcosystems, scanAny, npmPlugin, getPluginByName } from "./ecosystem/index.js";
+import { runLocalScanners } from "./scanner/local.js";
 import type { EcosystemPlugin } from "./ecosystem/types.js";
 import type {
   PackageReport,
@@ -100,6 +101,10 @@ export async function runScan(dir: string, opts: ScanOptions): Promise<number> {
     const reports = await runEcosystemRefs(plugin, refs, mergedOpts, cache, lockfileDir, advisoryMap);
     allReports.push(...reports);
   }
+
+  // Local file scanners (GitHub Actions, git submodules) — no registry, no packages
+  const localReports = await runLocalScanners(projectDir, mergedOpts);
+  allReports.push(...localReports);
 
   const project = buildProjectReport(allReports, "scan", mergedOpts.onlyFlagged, mergedOpts.minRisk);
   await writeOutput(project, mergedOpts);

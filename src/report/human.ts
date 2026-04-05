@@ -81,7 +81,17 @@ function renderPackage(pkg: PackageReport): string {
     ? c(YELLOW, `[${pkg.source.type.toUpperCase()}]`) + " "
     : "";
 
-  const pmBadge = pkg.packageManager === "pip" ? c(DIM, "[pip]") + " " : "";
+  const pmBadge = pkg.packageManager === "pip"
+    ? c(DIM, "[pip]") + " "
+    : pkg.packageManager === "cargo"
+    ? c(DIM, "[cargo]") + " "
+    : pkg.packageManager === "gem"
+    ? c(DIM, "[gem]") + " "
+    : pkg.packageManager === "actions"
+    ? c(DIM, "[actions]") + " "
+    : pkg.packageManager === "gitmodules"
+    ? c(DIM, "[gitmodules]") + " "
+    : "";
 
   const integrityBadge = pkg.source.integrity && !pkg.source.integrityVerified
     ? c(RED + BOLD, "[INTEGRITY MISMATCH]") + " "

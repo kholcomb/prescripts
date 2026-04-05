@@ -354,6 +354,56 @@ export const PATTERN_REGISTRY: ReadonlyArray<PatternDef> = [
     patterns: [], // emitted programmatically, not by regex
   },
 
+  // ── GitHub Actions patterns ────────────────────────────────────────────────
+
+  {
+    // Emitted programmatically by github-actions.ts when a uses: ref is not SHA-pinned.
+    category: "unpinned_action",
+    severity: "high",
+    description: "GitHub Action not pinned to a full commit SHA — tag or branch can be silently replaced",
+    patterns: [],
+  },
+  {
+    // Emitted programmatically by github-actions.ts for pull_request_target trigger.
+    category: "actions_prt",
+    severity: "medium",
+    description: "pull_request_target trigger runs with write access in context of base repo, even for fork PRs",
+    patterns: [],
+  },
+
+  // ── Git submodule patterns ─────────────────────────────────────────────────
+
+  {
+    category: "submodule_local_url",
+    severity: "critical",
+    description: "Git submodule uses a file:// URL — embeds a local filesystem path with no integrity guarantee",
+    patterns: [],
+  },
+  {
+    category: "submodule_credential_url",
+    severity: "critical",
+    description: "Git submodule URL contains embedded credentials — token or password in URL",
+    patterns: [],
+  },
+  {
+    category: "submodule_insecure_url",
+    severity: "high",
+    description: "Git submodule uses unencrypted http:// URL — susceptible to MITM",
+    patterns: [],
+  },
+  {
+    category: "submodule_unpinned",
+    severity: "medium",
+    description: "Git submodule tracks a mutable branch — commit can change without lockfile update",
+    patterns: [],
+  },
+  {
+    category: "submodule_unrecognized_host",
+    severity: "medium",
+    description: "Git submodule hosted on an unrecognized domain — verify the source is trustworthy",
+    patterns: [],
+  },
+
   // ── Python-specific patterns ────────────────────────────────────────────────
 
   {

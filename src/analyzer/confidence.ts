@@ -27,6 +27,11 @@ const ALWAYS_HIGH_CONFIDENCE = new Set([
   "python_shell_exec",        // subprocess calling curl/wget/bash/nc, or shell=True
   "pth_persistence",          // .pth file with executable code — persistence mechanism
   "gem_plugin_hook",          // rubygems_plugin.rb — executes on every gem command
+  "submodule_local_url",      // file:// submodule — definitively local, no integrity
+  "submodule_credential_url", // credentials in submodule URL — definitive secret exposure
+  "submodule_insecure_url",   // http:// submodule — definitively unencrypted
+  "unpinned_action",          // mutable-ref actions flagged at high confidence by scanner
+  "actions_prt",              // pull_request_target — definitively dangerous trigger
 ]);
 
 // Categories where provenance trust signals have more weight —
