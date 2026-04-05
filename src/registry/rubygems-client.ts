@@ -125,6 +125,23 @@ export async function resolveGemLatestVersion(name: string): Promise<string | nu
 }
 
 /**
+ * Fetch the current owner handles for a gem.
+ * Returns an empty array on any failure (owners are best-effort).
+ *
+ * Endpoint: GET https://rubygems.org/api/v1/gems/<name>/owners.json
+ */
+export async function fetchGemsOwners(name: string): Promise<string[]> {
+  const data = await fetchGemsJson(
+    `${GEMS_BASE}/gems/${encodeURIComponent(name)}/owners.json`
+  ) as Array<{ handle?: string }> | null;
+
+  if (!Array.isArray(data)) return [];
+  return data
+    .map((o) => o.handle)
+    .filter((h): h is string => typeof h === "string" && h.length > 0);
+}
+
+/**
  * Download raw .gem bytes.
  */
 export async function fetchGemBytes(url: string, timeout: number): Promise<Buffer> {

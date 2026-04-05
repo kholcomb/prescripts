@@ -48,6 +48,7 @@ import { fetchOsvAdvisories } from "../registry/osv-client.js";
 import {
   fetchGemsMeta,
   fetchGemBytes,
+  fetchGemsOwners,
   resolveGemLatestVersion,
 } from "../registry/rubygems-client.js";
 
@@ -182,7 +183,10 @@ export class GemPlugin implements EcosystemPlugin {
   }
 
   async fetchProvenance(ref: PackageRef, _opts: ScanOptions): Promise<ProvenanceFetchResult> {
-    const meta = await fetchGemsMeta(ref.name, ref.version);
+    const [meta, owners] = await Promise.all([
+      fetchGemsMeta(ref.name, ref.version),
+      fetchGemsOwners(ref.name),
+    ]);
 
     if (!meta) {
       return {
@@ -196,18 +200,18 @@ export class GemPlugin implements EcosystemPlugin {
     const provenance: ProvenanceInfo = {
       publishedAt: meta.uploadTime,
       weeklyDownloads: null,          // RubyGems API has total downloads, not weekly
-      maintainerCount: null,          // requires separate API call
+      maintainerCount: owners.length > 0 ? owners.length : null,
       installScriptIsNew: null,
       totalVersions: meta.totalVersions,
       unavailableReason: null,
       attestation: null,              // RubyGems does not have Sigstore attestations
       deprecated: meta.yanked ? "Yanked from RubyGems" : null,
       publisher: meta.authors ?? null,
-      publisherInMaintainers: null,
+      publisherInMaintainers: null,   // no per-version published_by in RubyGems API
       hasRegistrySignature: null,     // RubyGems does not sign .gem files with ECDSA
       attestationRegressed: null,
       firstPublishedAt: meta.firstUploadTime,
-      publisherIsNewToPackage: null,
+      publisherIsNewToPackage: null,  // no per-version published_by in RubyGems API
     };
 
     return {
