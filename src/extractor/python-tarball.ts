@@ -93,12 +93,12 @@ export interface PythonExtractResult {
 }
 
 /**
- * Downloads bytes from a URL (re-using npm registry client's retry logic via fetch).
+ * Downloads bytes from a URL, respecting HTTPS_PROXY/HTTP_PROXY env vars.
+ * PyPI tarball downloads must go through the same proxy as metadata requests.
  */
 async function downloadBytes(url: string, timeout: number): Promise<Buffer> {
-  const res = await fetch(url, { signal: AbortSignal.timeout(timeout) });
-  if (!res.ok) throw new Error(`HTTP ${res.status} fetching ${url}`);
-  return Buffer.from(await res.arrayBuffer());
+  const { fetchWithProxyRaw } = await import("../registry/pypi-client.js");
+  return fetchWithProxyRaw(url, timeout);
 }
 
 export async function extractPythonPackage(

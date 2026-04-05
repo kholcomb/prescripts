@@ -5,12 +5,193 @@
  *
  * GET https://pypi.org/pypi/<name>/json           → latest release + all versions
  * GET https://pypi.org/pypi/<name>/<version>/json → specific version
+ *
+ * Corporate proxy / private index support
+ * ────────────────────────────────────────
+ * PIP_INDEX_URL (or PIP_EXTRA_INDEX_URL):
+ *   Set to a private PyPI mirror (Artifactory, Nexus, Devpi, etc.).
+ *   Example: https://pypi.corp.example.com/simple/
+ *   We derive the JSON API base by stripping the trailing "/simple/" suffix
+ *   and using the root as the base for /pypi/<name>/<version>/json requests.
+ *
+ * HTTPS_PROXY / HTTP_PROXY:
+ *   Standard proxy env vars. Node.js's built-in fetch() ignores these; we
+ *   implement CONNECT-tunnel proxy support using http/https modules directly.
+ *
+ * NO_PROXY:
+ *   Comma-separated list of hostnames/CIDRs to bypass the proxy. We respect
+ *   this to avoid routing internal requests through an external proxy.
  */
 
 let pypiTimeout = 30_000;
 
 export function setPyPITimeout(ms: number): void {
   pypiTimeout = ms;
+}
+
+// ── Proxy and index configuration ─────────────────────────────────────────────
+
+/**
+ * Returns the base URL for the PyPI JSON API, respecting PIP_INDEX_URL.
+ *
+ * PIP_INDEX_URL typically points to a /simple/ endpoint; we derive the JSON
+ * API base by removing the /simple/ suffix (or similar path suffix) and
+ * falling back to pypi.org if the index doesn't serve the JSON API.
+ */
+function getPyPIBase(): string {
+  const indexUrl =
+    process.env["PIP_INDEX_URL"] ?? process.env["PIP_EXTRA_INDEX_URL"];
+
+  if (!indexUrl) return "https://pypi.org";
+
+  // Strip trailing /simple/ or /simple (PEP 503 simple index suffix)
+  const base = indexUrl.replace(/\/simple\/?$/, "").replace(/\/$/, "");
+  return base;
+}
+
+/**
+ * Returns the proxy URL from environment, or null if no proxy is configured.
+ * Respects NO_PROXY for the given hostname.
+ */
+function getProxyUrl(targetHost: string): string | null {
+  const noProxy = process.env["NO_PROXY"] ?? process.env["no_proxy"] ?? "";
+  if (noProxy) {
+    const noProxyEntries = noProxy.split(",").map((s) => s.trim().toLowerCase());
+    const host = targetHost.toLowerCase();
+    for (const entry of noProxyEntries) {
+      if (entry === "*" || host === entry || host.endsWith(`.${entry}`)) {
+        return null;
+      }
+    }
+  }
+
+  return (
+    process.env["HTTPS_PROXY"] ??
+    process.env["https_proxy"] ??
+    process.env["HTTP_PROXY"] ??
+    process.env["http_proxy"] ??
+    null
+  );
+}
+
+/**
+ * Fetch a URL respecting HTTPS_PROXY/HTTP_PROXY/NO_PROXY environment variables.
+ *
+ * Node.js built-in fetch() ignores proxy env vars. When a proxy is configured,
+ * we implement an HTTP CONNECT tunnel using node:http + node:tls, then make
+ * the HTTPS request over that tunnel.
+ */
+async function fetchWithProxy(
+  url: string,
+  options: { timeout: number; headers?: Record<string, string> }
+): Promise<Response> {
+  const parsed = new URL(url);
+  const proxyUrl = getProxyUrl(parsed.hostname);
+
+  if (!proxyUrl) {
+    return fetch(url, {
+      signal: AbortSignal.timeout(options.timeout),
+      ...(options.headers ? { headers: options.headers } : {}),
+    });
+  }
+
+  return fetchViaConnectProxy(url, proxyUrl, options);
+}
+
+/**
+ * Fetch via HTTP CONNECT proxy tunnel.
+ *
+ *   1. Send HTTP CONNECT to the proxy → establishes a TCP tunnel to the target
+ *   2. Upgrade the tunneled TCP socket to TLS via tls.connect()
+ *   3. Make the HTTPS request over the TLS socket using createConnection option
+ */
+async function fetchViaConnectProxy(
+  url: string,
+  proxyUrl: string,
+  options: { timeout: number; headers?: Record<string, string> }
+): Promise<Response> {
+  const { request: httpRequest } = await import("node:http");
+  const { request: httpsRequest } = await import("node:https");
+  const { connect: tlsConnect } = await import("node:tls");
+
+  return new Promise((resolve, reject) => {
+    const target = new URL(url);
+    const proxy = new URL(proxyUrl);
+    const targetHost = target.hostname;
+    const targetPort = parseInt(target.port || "443", 10);
+
+    const connectHeaders: Record<string, string> = {
+      "Host": `${targetHost}:${targetPort}`,
+    };
+    if (proxy.username) {
+      const auth = Buffer.from(`${decodeURIComponent(proxy.username)}:${decodeURIComponent(proxy.password)}`).toString("base64");
+      connectHeaders["Proxy-Authorization"] = `Basic ${auth}`;
+    }
+
+    const timer = setTimeout(() => {
+      connectReq.destroy();
+      reject(new Error(`Proxy CONNECT timeout to ${targetHost}:${targetPort} via ${proxyUrl}`));
+    }, options.timeout);
+
+    const connectReq = httpRequest({
+      hostname: proxy.hostname,
+      port: parseInt(proxy.port || "8080", 10),
+      method: "CONNECT",
+      path: `${targetHost}:${targetPort}`,
+      headers: connectHeaders,
+    });
+
+    connectReq.on("connect", (_res, socket) => {
+      // Upgrade the TCP tunnel socket to TLS
+      const tlsSocket = tlsConnect({
+        socket,
+        servername: targetHost,
+        rejectUnauthorized: true,
+      });
+
+      tlsSocket.on("secureConnect", () => {
+        // TLS handshake complete — make the actual HTTPS request
+        const req = httpsRequest({
+          createConnection: () => tlsSocket,
+          hostname: targetHost,
+          port: targetPort,
+          path: target.pathname + target.search,
+          method: "GET",
+          headers: {
+            "Host": targetHost,
+            "Accept": "application/json",
+            ...options.headers,
+          },
+        }, (res) => {
+          clearTimeout(timer);
+          const chunks: Buffer[] = [];
+          res.on("data", (chunk: Buffer) => chunks.push(chunk));
+          res.on("end", () => {
+            const body = Buffer.concat(chunks);
+            resolve(new Response(body, {
+              status: res.statusCode ?? 200,
+            }));
+          });
+          res.on("error", reject);
+        });
+
+        req.on("error", reject);
+        req.end();
+      });
+
+      tlsSocket.on("error", (err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+    });
+
+    connectReq.on("error", (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
+
+    connectReq.end();
+  });
 }
 
 export interface PyPIVersionInfo {
@@ -60,8 +241,8 @@ interface PyPIResponse {
 
 async function fetchPyPI(url: string): Promise<PyPIResponse | null> {
   try {
-    const res = await fetch(url, {
-      signal: AbortSignal.timeout(pypiTimeout),
+    const res = await fetchWithProxy(url, {
+      timeout: pypiTimeout,
       headers: { "Accept": "application/json" },
     });
     if (!res.ok) return null;
@@ -116,12 +297,13 @@ export async function fetchPyPIMeta(
   version: string
 ): Promise<PyPIVersionInfo | null> {
   const isLatest = !version || version === "latest";
+  const base = getPyPIBase();
 
   // Package-level endpoint always has `releases`; version endpoint has `urls` for that version
-  const pkgUrl = `https://pypi.org/pypi/${encodeURIComponent(name)}/json`;
+  const pkgUrl = `${base}/pypi/${encodeURIComponent(name)}/json`;
   const verUrl = isLatest
     ? pkgUrl
-    : `https://pypi.org/pypi/${encodeURIComponent(name)}/${encodeURIComponent(version)}/json`;
+    : `${base}/pypi/${encodeURIComponent(name)}/${encodeURIComponent(version)}/json`;
 
   // Fetch both in parallel (version-specific for file URLs, package-level for release history)
   const [verData, pkgData] = await Promise.all([
@@ -157,8 +339,19 @@ export async function fetchPyPIMeta(
 /**
  * Resolve "latest" to a concrete version number.
  */
+/**
+ * Download raw bytes from a URL via proxy if configured.
+ * Used by the Python tarball extractor so downloads respect the same proxy as metadata.
+ */
+export async function fetchWithProxyRaw(url: string, timeout: number): Promise<Buffer> {
+  const res = await fetchWithProxy(url, { timeout });
+  if (!res.ok) throw new Error(`HTTP ${res.status} fetching ${url}`);
+  return Buffer.from(await res.arrayBuffer());
+}
+
 export async function resolvePyPILatestVersion(name: string): Promise<string | null> {
-  const url = `https://pypi.org/pypi/${encodeURIComponent(name)}/json`;
+  const base = getPyPIBase();
+  const url = `${base}/pypi/${encodeURIComponent(name)}/json`;
   const data = await fetchPyPI(url);
   return data?.info.version ?? null;
 }
