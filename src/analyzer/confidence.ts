@@ -89,15 +89,23 @@ export function scoreFindings(
     if (ALWAYS_HIGH_CONFIDENCE.has(f.category)) {
       return { ...f, confidence: "high" as Confidence };
     }
-    // provenance_regression floor: only relax to "low" when publisher identity
-    // and signing infrastructure both check out. Popularity/version count are
-    // intentionally excluded — high-value targets are exactly what threat actors
-    // target, so those signals don't reduce suspicion here.
+    // provenance_regression: strip the circular signals before scoring.
+    // attestationRegressed (+3) is the finding itself — using it to score
+    // its own confidence is circular. publisherInMaintainers===false (+2)
+    // often reflects CI automation, not a human attacker; without additional
+    // corroborating signals it shouldn't elevate confidence on its own.
+    // Remaining score reflects genuine corroborating signals only:
+    // installScriptIsNew, low downloads, few versions, deprecated, etc.
     if (f.category === "provenance_regression") {
-      const c = scoreToConfidence(pScore, false);
-      const publisherKnown = provenance.publisherInMaintainers !== false;
-      const infraSigned = provenance.hasRegistrySignature === true;
-      const canDropFloor = publisherKnown && infraSigned;
+      let corroborating = pScore;
+      if (provenance.attestationRegressed === true) corroborating -= 3;
+      if (provenance.publisherInMaintainers === false) corroborating -= 2;
+
+      const c = scoreToConfidence(corroborating, false);
+      // Floor: require at minimum that the tarball is registry-signed.
+      // Publisher identity is not required — CI bots are common and don't
+      // imply an attacker. Unsigned packages keep the "medium" floor.
+      const canDropFloor = provenance.hasRegistrySignature === true;
       return { ...f, confidence: c === "low" && !canDropFloor ? "medium" : c };
     }
     const isHighNoise = HIGH_NOISE_CATEGORIES.has(f.category);
