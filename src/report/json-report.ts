@@ -10,21 +10,22 @@ export function buildProjectReport(
   onlyFlagged: boolean,
   minRisk: RiskLevel = "low"
 ): ProjectReport {
-  const flagged = packages.filter(
-    (p) => p.findings.length > 0 || p.advisories.length > 0
-  );
-  // Apply minRisk filter — "verified" packages are only shown when minRisk = "verified"
+  const isFlagged = (p: PackageReport) =>
+    p.findings.length > 0 || p.advisories.length > 0;
   const meetsThreshold = (p: PackageReport) =>
     RISK_ORDER[p.risk] >= RISK_ORDER[minRisk];
+
   const output = onlyFlagged
-    ? flagged.filter(meetsThreshold)
+    ? packages.filter((p) => isFlagged(p) && meetsThreshold(p))
     : packages.filter(meetsThreshold);
 
   return {
     scannedAt: new Date().toISOString(),
     mode,
     totalPackages: packages.length,
-    flaggedPackages: flagged.length,
+    // flaggedPackages = packages with findings that meet the risk threshold —
+    // used for exit code and summary. Matches what's shown in output.
+    flaggedPackages: packages.filter((p) => isFlagged(p) && meetsThreshold(p)).length,
     packages: output,
   };
 }
