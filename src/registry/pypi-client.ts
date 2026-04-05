@@ -349,6 +349,40 @@ export async function fetchWithProxyRaw(url: string, timeout: number): Promise<B
   return Buffer.from(await res.arrayBuffer());
 }
 
+/**
+ * Fetches the raw PEP 740 provenance document for a specific release file.
+ *
+ * Endpoint: GET https://pypi.org/integrity/<project>/<version>/<filename>/provenance
+ * Requires Accept: application/vnd.pypi.integrity.v1+json
+ *
+ * Returns the parsed JSON body as an opaque value (parsing is the caller's
+ * responsibility) or null on any failure.
+ *
+ * Short-circuits to null when a private index is configured — corporate mirrors
+ * (Artifactory, Nexus, Devpi) do not serve this endpoint.
+ */
+export async function fetchPyPIProvenance(
+  name: string,
+  version: string,
+  filename: string
+): Promise<unknown | null> {
+  // Only the public PyPI registry serves the integrity API
+  if (getPyPIBase() !== "https://pypi.org") return null;
+
+  const url = `https://pypi.org/integrity/${encodeURIComponent(name)}/${encodeURIComponent(version)}/${encodeURIComponent(filename)}/provenance`;
+
+  try {
+    const res = await fetchWithProxy(url, {
+      timeout: pypiTimeout,
+      headers: { "Accept": "application/vnd.pypi.integrity.v1+json" },
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
 export async function resolvePyPILatestVersion(name: string): Promise<string | null> {
   const base = getPyPIBase();
   const url = `${base}/pypi/${encodeURIComponent(name)}/json`;
