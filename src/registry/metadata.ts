@@ -18,6 +18,24 @@ function hasInstallScript(scripts: Record<string, string> | undefined): boolean 
   return LIFECYCLE_HOOKS.some((h) => h in scripts);
 }
 
+// Numeric semver comparator — handles X.Y.Z and X.Y.Z-pre tags.
+// Stable > pre-release when numeric parts are equal (semver §11.4).
+function semverCompare(a: string, b: string): number {
+  const parse = (v: string) => {
+    const [main = "", pre = ""] = v.split("-", 2) as [string, string];
+    const [major = 0, minor = 0, patch = 0] = main.split(".").map(Number);
+    return { major, minor, patch, pre };
+  };
+  const va = parse(a);
+  const vb = parse(b);
+  for (const k of ["major", "minor", "patch"] as const) {
+    if (va[k] !== vb[k]) return va[k] - vb[k];
+  }
+  if (!va.pre && vb.pre) return 1;
+  if (va.pre && !vb.pre) return -1;
+  return va.pre.localeCompare(vb.pre);
+}
+
 function extractLifecycleOnly(
   scripts: Record<string, string> | undefined
 ): LifecycleScripts | null {
@@ -78,7 +96,9 @@ export async function fetchProvenance(
     const versionEntry = meta.versions[version];
 
     // --- installScriptIsNew ---
-    const versionList = Object.keys(meta.versions);
+    // Sort versions by semver before comparing so backpatched releases (e.g. a
+    // 7.x patch published after 8.0.0) don't become the spurious "predecessor".
+    const versionList = Object.keys(meta.versions).sort(semverCompare);
     const versionIndex = versionList.indexOf(version);
     let installScriptIsNew: boolean | null = null;
     const currentHasScript = hasInstallScript(versionEntry?.scripts);
