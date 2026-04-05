@@ -23,6 +23,46 @@ import { parsePyPIAttestation } from "../registry/pypi-attestation.js";
 import { extractPythonHooks, hasPythonHooks } from "../analyzer/python-hooks.js";
 import { fetchOsvAdvisories } from "../registry/osv-client.js";
 
+/**
+ * Checks whether a previous PyPI release had a PEP 740 attestation that the
+ * current release is missing. This is a lightweight presence check — we only
+ * verify that the provenance endpoint returns attestation_bundles, not the
+ * full Sigstore chain (the current version's bundle is already verified).
+ *
+ * Returns:
+ *   false  — current version has attestation (no regression possible), or
+ *            previous version also lacks attestation
+ *   true   — previous version had attestation, current version does not
+ *   null   — no previous version to compare, or comparison unavailable
+ */
+async function resolveAttestationRegressed(
+  currentAttestation: import("../types.js").AttestationInfo | null,
+  previousVersion: string | null,
+  packageName: string
+): Promise<boolean | null> {
+  // Current version has attestation — no regression possible
+  if (currentAttestation !== null) return false;
+
+  // No previous version to compare against
+  if (!previousVersion) return null;
+
+  try {
+    const prevMeta = await fetchPyPIMeta(packageName, previousVersion);
+    if (!prevMeta) return null;
+
+    const prevFilename = prevMeta.tarballUrl.split("/").pop() ?? "";
+    if (!prevFilename) return null;
+
+    const raw = await fetchPyPIProvenance(packageName, previousVersion, prevFilename);
+    if (!raw || typeof raw !== "object") return false;
+
+    const bundles = (raw as Record<string, unknown>)["attestation_bundles"];
+    return Array.isArray(bundles) && bundles.length > 0;
+  } catch {
+    return null;
+  }
+}
+
 export class PipPlugin implements EcosystemPlugin {
   readonly packageManager = "pip" as const;
 
@@ -142,6 +182,15 @@ export class PipPlugin implements EcosystemPlugin {
         )
       : null;
 
+    // Regression check: only needed when the current version lacks attestation.
+    // If it has one, regression is impossible. If there's no previous version to
+    // compare against, we can't determine regression (null = unknown).
+    const attestationRegressed = await resolveAttestationRegressed(
+      attestation,
+      meta.previousVersion,
+      ref.name
+    );
+
     const provenance: ProvenanceInfo = {
       publishedAt: meta.uploadTime,
       weeklyDownloads: null,           // requires pypistats.org — not fetched
@@ -155,7 +204,7 @@ export class PipPlugin implements EcosystemPlugin {
       publisher: attestation?.sourceRepo ?? meta.maintainer ?? meta.author ?? null,
       publisherInMaintainers: null,    // no maintainer list in PyPI API
       hasRegistrySignature: null,      // PyPI does not sign packages with ECDSA
-      attestationRegressed: null,      // populated in segment 4
+      attestationRegressed,
       firstPublishedAt: meta.firstUploadTime,
       publisherIsNewToPackage: null,
     };

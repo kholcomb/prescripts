@@ -212,6 +212,12 @@ export interface PyPIVersionInfo {
   maintainer: string | null;
   /** Author field as fallback identity. */
   author: string | null;
+  /**
+   * The version string of the release published immediately before this one,
+   * by upload time. null when this is the first or only release, or when the
+   * upload time cannot be determined. Used for attestationRegressed detection.
+   */
+  previousVersion: string | null;
 }
 
 interface PyPIFileEntry {
@@ -284,6 +290,36 @@ function firstUploadTime(releases: Record<string, PyPIFileEntry[]>): string | nu
 }
 
 /**
+ * Find the version published immediately before `currentVersion` by upload time.
+ * Returns null when this is the first/only release or upload times are unavailable.
+ */
+function findPreviousVersion(
+  releases: Record<string, PyPIFileEntry[]>,
+  currentVersion: string,
+  currentUploadTime: string
+): string | null {
+  const candidates: Array<{ version: string; uploadTime: string }> = [];
+
+  for (const [ver, files] of Object.entries(releases)) {
+    if (ver === currentVersion || files.length === 0) continue;
+    // Use the earliest file upload time as the version's publish time
+    const earliest = files.reduce<string | null>((min, f) => {
+      if (!f.upload_time_iso_8601) return min;
+      return min === null || f.upload_time_iso_8601 < min ? f.upload_time_iso_8601 : min;
+    }, null);
+    if (earliest && earliest < currentUploadTime) {
+      candidates.push({ version: ver, uploadTime: earliest });
+    }
+  }
+
+  if (candidates.length === 0) return null;
+
+  // The predecessor is the candidate with the latest upload time before the current
+  candidates.sort((a, b) => a.uploadTime.localeCompare(b.uploadTime));
+  return candidates[candidates.length - 1]!.version;
+}
+
+/**
  * Fetch PyPI metadata for a specific package version.
  *
  * If version is "latest", fetches the latest release.
@@ -322,17 +358,22 @@ export async function fetchPyPIMeta(
   const releases = historyData.releases ?? {};
   const totalVersions = Object.keys(releases).length;
   const first = Object.keys(releases).length > 0 ? firstUploadTime(releases) : null;
+  const uploadTime = best.upload_time_iso_8601 ?? null;
+  const previousVersion = uploadTime
+    ? findPreviousVersion(releases, version, uploadTime)
+    : null;
 
   return {
     tarballUrl: best.url,
     sha256: best.digests.sha256 ? `sha256:${best.digests.sha256}` : null,
-    uploadTime: best.upload_time_iso_8601 ?? null,
+    uploadTime,
     yanked: verData.info.yanked || best.yanked,
     yankedReason: verData.info.yanked_reason || best.yanked_reason || null,
     totalVersions,
     firstUploadTime: first,
     maintainer: verData.info.maintainer || null,
     author: verData.info.author || null,
+    previousVersion,
   };
 }
 

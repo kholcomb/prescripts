@@ -35,6 +35,7 @@ const BASE_META = {
   firstUploadTime: "2011-02-14T00:00:00Z",
   maintainer: "Kenneth Reitz",
   author: "Kenneth Reitz",
+  previousVersion: "2.30.0",
 };
 
 const ATTESTATION_INFO = {
@@ -57,6 +58,56 @@ beforeEach(() => {
 });
 
 afterEach(() => vi.resetAllMocks());
+
+describe("pip fetchProvenance — attestationRegressed", () => {
+  it("sets attestationRegressed: false when current version has attestation", async () => {
+    vi.mocked(parsePyPIAttestation).mockResolvedValue(ATTESTATION_INFO);
+    const result = await pipPlugin.fetchProvenance(REF, OPTS);
+    expect(result.provenance.attestationRegressed).toBe(false);
+    // Should not fetch previous version — regression impossible when current has attestation
+    expect(fetchPyPIProvenance).toHaveBeenCalledTimes(1); // only current version
+  });
+
+  it("sets attestationRegressed: null when no previous version exists", async () => {
+    vi.mocked(parsePyPIAttestation).mockResolvedValue(null);
+    vi.mocked(fetchPyPIMeta).mockResolvedValue({ ...BASE_META, previousVersion: null });
+    const result = await pipPlugin.fetchProvenance(REF, OPTS);
+    expect(result.provenance.attestationRegressed).toBeNull();
+  });
+
+  it("sets attestationRegressed: true when previous version had attestation", async () => {
+    vi.mocked(parsePyPIAttestation).mockResolvedValue(null);
+    vi.mocked(fetchPyPIMeta)
+      .mockResolvedValueOnce({ ...BASE_META, previousVersion: "2.30.0" }) // current
+      .mockResolvedValueOnce({ ...BASE_META, tarballUrl: "https://files.pythonhosted.org/packages/requests-2.30.0.tar.gz" }); // previous
+    vi.mocked(fetchPyPIProvenance)
+      .mockResolvedValueOnce(null)                                       // current: no attestation
+      .mockResolvedValueOnce({ version: 1, attestation_bundles: [{}] }); // previous: had attestation
+    const result = await pipPlugin.fetchProvenance(REF, OPTS);
+    expect(result.provenance.attestationRegressed).toBe(true);
+  });
+
+  it("sets attestationRegressed: false when previous version also lacks attestation", async () => {
+    vi.mocked(parsePyPIAttestation).mockResolvedValue(null);
+    vi.mocked(fetchPyPIMeta)
+      .mockResolvedValueOnce({ ...BASE_META, previousVersion: "2.30.0" })
+      .mockResolvedValueOnce({ ...BASE_META, tarballUrl: "https://files.pythonhosted.org/packages/requests-2.30.0.tar.gz" });
+    vi.mocked(fetchPyPIProvenance)
+      .mockResolvedValueOnce(null)   // current: no attestation
+      .mockResolvedValueOnce(null);  // previous: also no attestation
+    const result = await pipPlugin.fetchProvenance(REF, OPTS);
+    expect(result.provenance.attestationRegressed).toBe(false);
+  });
+
+  it("sets attestationRegressed: null when previous version metadata is unavailable", async () => {
+    vi.mocked(parsePyPIAttestation).mockResolvedValue(null);
+    vi.mocked(fetchPyPIMeta)
+      .mockResolvedValueOnce({ ...BASE_META, previousVersion: "2.30.0" })
+      .mockResolvedValueOnce(null); // previous version fetch fails
+    const result = await pipPlugin.fetchProvenance(REF, OPTS);
+    expect(result.provenance.attestationRegressed).toBeNull();
+  });
+});
 
 describe("pip fetchProvenance — attestation wiring", () => {
   it("calls fetchPyPIProvenance with the filename extracted from tarballUrl", async () => {
