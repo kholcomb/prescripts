@@ -31,5 +31,5 @@ export function buildProjectReport(
 }
 
 export function toJson(report: ProjectReport): string {
-  return JSON.stringify(report, null, 2);
+  return JSON.stringify(report, (key, value) => key === "_warning" ? undefined : value, 2);
 }
