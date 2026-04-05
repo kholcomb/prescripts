@@ -1,5 +1,4 @@
 import type {
-  LifecycleScripts,
   Finding,
   Excerpt,
   Severity,
@@ -37,7 +36,7 @@ function makeExcerpt(text: string, matchIndex: number): Excerpt {
 function scanText(
   text: string,
   source: string,
-  hook: keyof LifecycleScripts | null,
+  hook: string | null,
   minSeverity: Severity
 ): Finding[] {
   const findings: Finding[] = [];
@@ -51,6 +50,10 @@ function scanText(
   for (const patternDef of PATTERN_REGISTRY) {
     if (patternDef.patterns.length === 0) continue;
     if (severityOrder[patternDef.severity] < severityOrder[minSeverity]) {
+      continue;
+    }
+    // sourceMatch restricts this pattern to specific source types (e.g. .pth files only)
+    if (patternDef.sourceMatch && !patternDef.sourceMatch.test(source)) {
       continue;
     }
 
@@ -74,9 +77,9 @@ function scanText(
   return findings;
 }
 
-// Extracts filenames referenced by node/bash/sh in a script string
+// Extracts filenames referenced by node/bash/sh/python in a script string
 const SCRIPT_REF_PATTERN =
-  /(?:node|bash|sh)\s+([\w./\-]+\.(?:js|ts|mjs|cjs|sh))/g;
+  /(?:node|bash|sh|python\d*)\s+([\w./\-]+\.(?:js|ts|mjs|cjs|sh|py))/g;
 
 function extractReferencedFiles(scriptValue: string): string[] {
   const refs: string[] = [];
@@ -93,16 +96,13 @@ export interface ScanResult {
 }
 
 export function scanPackage(
-  scripts: LifecycleScripts,
+  scripts: Record<string, string>,
   fileMap: Map<string, string>,
   minSeverity: Severity
 ): ScanResult {
   const findings: Finding[] = [];
 
-  for (const [hook, scriptValue] of Object.entries(scripts) as [
-    keyof LifecycleScripts,
-    string,
-  ][]) {
+  for (const [hook, scriptValue] of Object.entries(scripts)) {
     // Scan the script string itself
     const scriptFindings = scanText(
       scriptValue,

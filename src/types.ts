@@ -5,6 +5,8 @@ export type SourceType =
   | "direct-tarball"
   | "local";
 
+export type PackageManager = "npm" | "pip";
+
 export type Severity = "critical" | "high" | "medium" | "low";
 export type Confidence = "high" | "medium" | "low";
 export type RiskLevel = "critical" | "high" | "medium" | "low" | "verified";
@@ -27,6 +29,21 @@ export interface AttestationInfo {
   sourceRepo: string | null;    // e.g. "github.com/expressjs/express"
   buildWorkflow: string | null; // e.g. ".github/workflows/release.yml"
   predicateType: string | null; // SLSA predicate URI
+  /** SRI-format sha512 of the attested tarball, from the in-toto subject digest.
+   *  e.g. "sha512-abc...". Compare against the tarball we actually downloaded. */
+  subjectIntegrity: string | null;
+  /**
+   * Full Sigstore chain verification result:
+   *   true  = DSSE sig + Fulcio cert chain + Rekor SET + Merkle proof all passed
+   *   false = one or more checks definitively failed (bundle is tampered or fabricated)
+   *   null  = could not complete verification (trusted root unavailable, format error)
+   */
+  sigstoreVerified: boolean | null;
+  /** GitHub Actions identity URI from the Fulcio certificate SAN.
+   *  e.g. "https://github.com/owner/repo/.github/workflows/release.yml@refs/tags/v1.0.0" */
+  signingIdentity: string | null;
+  /** Descriptions of any verification failures or skipped checks. */
+  sigstoreErrors: string[] | null;
 }
 
 export interface ProvenanceInfo {
@@ -50,6 +67,12 @@ export interface ProvenanceInfo {
   /** True if the previous version had a Sigstore attestation but this one does not.
    *  The exact signal that would have caught the Axios supply chain attack. */
   attestationRegressed: boolean | null;
+  /** Date the very first version of this package was published.
+   *  Combined with publishedAt + totalVersions, reveals version farming. */
+  firstPublishedAt: string | null;
+  /** True if this publisher has never published this package before.
+   *  Fingerprints account takeover even when the attacker is a current maintainer. */
+  publisherIsNewToPackage: boolean | null;
 }
 
 /** Returned by fetchProvenance — includes registry manifest scripts for
@@ -60,18 +83,21 @@ export interface ProvenanceFetchResult {
    *  Used to detect manifest confusion: tarball scripts differ from what
    *  the registry shows as the authoritative package.json. */
   registryManifestScripts: LifecycleScripts | null;
+  /** dist.integrity from the registry manifest.
+   *  Compare against the lockfile integrity field to detect lockfile poisoning. */
+  registryIntegrity: string | null;
+  /** dist.signatures from the registry manifest, for ECDSA verification. */
+  registrySignatures: Array<{ keyid: string; sig: string }> | null;
 }
 
-export interface LifecycleScripts {
-  preinstall?: string;
-  install?: string;
-  postinstall?: string;
-  prepare?: string;
-  prepublish?: string;
-  prepublishOnly?: string;
-  prepack?: string;
-  postpack?: string;
-}
+/**
+ * Install hook name → script/command string.
+ *
+ * npm standard keys: preinstall, install, postinstall, prepare, prepublish,
+ *   prepublishOnly, prepack, postpack
+ * Python keys: "setup.py", "pyproject.toml [build-hooks]", "<name>.pth [.pth persistence]"
+ */
+export type LifecycleScripts = Record<string, string>;
 
 export interface Excerpt {
   _warning: "UNTRUSTED THIRD-PARTY CONTENT";
@@ -79,7 +105,7 @@ export interface Excerpt {
 }
 
 export interface Finding {
-  scriptHook: keyof LifecycleScripts | null;
+  scriptHook: string | null;
   source: string;
   category: string;
   severity: Severity;
@@ -127,6 +153,8 @@ export interface NpmPrescriptsConfig {
 export interface PackageReport {
   name: string;
   version: string;
+  /** "pip" for Python packages from PyPI; absent/undefined for npm packages. */
+  packageManager?: PackageManager;
   source: SourceInfo;
   provenance: ProvenanceInfo;
   lifecycleScripts: LifecycleScripts;

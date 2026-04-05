@@ -1,6 +1,6 @@
 import type { LifecycleScripts, BinaryField } from "../types.js";
 
-const LIFECYCLE_HOOKS: ReadonlyArray<keyof LifecycleScripts> = [
+const LIFECYCLE_HOOKS: ReadonlyArray<string> = [
   "preinstall",
   "install",
   "postinstall",

@@ -5,6 +5,9 @@ export interface PatternDef {
   severity: Severity;
   patterns: RegExp[];
   description: string;
+  /** If set, only apply this pattern category when the scan source string matches.
+   *  Used to restrict e.g. pth_persistence patterns to .pth files only. */
+  sourceMatch?: RegExp;
 }
 
 export const PATTERN_REGISTRY: ReadonlyArray<PatternDef> = [
@@ -331,6 +334,101 @@ export const PATTERN_REGISTRY: ReadonlyArray<PatternDef> = [
     severity: "critical",
     description: "Downloaded content does not match expected integrity hash",
     patterns: [], // emitted programmatically, not by regex
+  },
+
+  // ── Python-specific patterns ────────────────────────────────────────────────
+
+  {
+    category: "python_exec",
+    severity: "high",
+    description: "Dynamic process execution in Python install hook",
+    patterns: [
+      /\bsubprocess\.(?:run|call|check_output|check_call|Popen)\s*\(/,
+      /\bos\.system\s*\(/,
+      /\bos\.popen\s*\(/,
+      /\bos\.exec[vle]+\s*\(/,
+      /\bcommands\.getoutput\s*\(/,
+    ],
+  },
+  {
+    category: "python_network",
+    severity: "high",
+    description: "Network request in Python install hook",
+    patterns: [
+      /\burllib(?:\.request)?\.urlopen\s*\(/,
+      /\burllib\.request\.urlretrieve\s*\(/,
+      /\brequests\.(?:get|post|put|patch|delete|request|Session)\s*\(/,
+      /\bhttpx\.(?:get|post|request|Client)\s*\(/,
+      /\baiohttp\.ClientSession\s*\(/,
+      /\bhttp\.client\.HTTPConnection\s*\(/,
+      /\bsocket\.(?:connect|create_connection)\s*\(/,
+    ],
+  },
+  {
+    category: "python_obfuscation",
+    severity: "high",
+    description: "Encoding or dynamic code evaluation in Python",
+    patterns: [
+      // exec with base64-decoded payload — classic attack vector
+      /\bexec\s*\(\s*base64\.b64decode\s*\(/,
+      /\bexec\s*\(\s*__import__\s*\(\s*['"]base64['"]/,
+      // eval with compiled code or encoded string
+      /\beval\s*\(\s*compile\s*\(/,
+      // marshal.loads executes serialized Python bytecode
+      /\bmarshal\.loads\s*\(/,
+      // zlib decompress + exec — common multi-layer obfuscation
+      /zlib\.decompress.*exec/,
+      /exec.*zlib\.decompress/,
+      // Long inline base64 literals in Python (80+ chars)
+      /b['"]{1}[A-Za-z0-9+/]{80,}={0,2}['"]{1}/,
+      // Hex-encoded string executed
+      /bytes\.fromhex\s*\([^)]+\)\s*\.decode/,
+      // codecs.decode with rot13 or base64 — obfuscation
+      /codecs\.decode\s*\([^,]+,\s*['"](?:rot.?13|base64)['"]/,
+    ],
+  },
+  {
+    // critical: .pth files installed to site-packages run at every Python startup.
+    // Legitimate .pth files contain only filesystem paths. Code execution here
+    // is a persistence mechanism — it survives the install and runs indefinitely.
+    // Attack vector: ctx (2022), Python-utils attack campaign.
+    // sourceMatch restricts these patterns to .pth file sources only — `import` at
+    // the start of a line is normal in any Python file but malicious in a .pth file.
+    category: "pth_persistence",
+    severity: "critical",
+    description:
+      ".pth file contains executable code — runs at every Python startup after install",
+    sourceMatch: /\.pth/,
+    patterns: [
+      // "import <module>" at start of line — executes the module
+      /^import\s+\w/m,
+      // exec(), __import__(), or eval() in a .pth file
+      /^exec\s*\(/m,
+      /^__import__\s*\(/m,
+      /^eval\s*\(/m,
+    ],
+  },
+  {
+    category: "python_credential_files",
+    severity: "high",
+    description: "Reads Python-ecosystem credential files",
+    patterns: [
+      /~\/\.pypirc\b/,         // PyPI upload credentials
+      /pip\.conf\b/,           // pip configuration (may contain index credentials)
+      /\/\.local\/lib\//,      // user site-packages path traversal
+      /site-packages\b.*\.\./,  // path traversal out of site-packages
+    ],
+  },
+  {
+    category: "python_ctypes",
+    severity: "high",
+    description: "Loads native code via ctypes or cffi — executes outside Python sandbox",
+    patterns: [
+      /\bctypes\.(?:cdll|windll|oledll)\.LoadLibrary\s*\(/,
+      /\bctypes\.CDLL\s*\(/,
+      /\bcffi\.FFI\s*\(\s*\)/,
+      /\bctypes\.WinDLL\s*\(/,
+    ],
   },
 ];
 
