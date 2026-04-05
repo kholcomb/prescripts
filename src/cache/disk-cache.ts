@@ -14,8 +14,11 @@ function defaultCacheDir(): string {
 }
 
 function cacheKey(name: string, integrity: string | null, version: string): string {
-  if (integrity) {
-    // Use hash portion of integrity string as directory name
+  // Require ":" to distinguish real integrity hashes (sha512-xxx, sha256:xxx) from
+  // bare version strings that some callers pass as a fallback. Without this check,
+  // packages like requests@2.31.0 and boto3@2.31.0 (both with no hash) would share
+  // the same cache directory ("2.31.0"), causing cross-package cache collisions.
+  if (integrity && integrity.includes(":")) {
     return integrity.replace(/^sha\d+:/, "sha-").replace(/[/+=]/g, "_");
   }
   // Fallback for packages without integrity (shouldn't happen in modern lockfiles)
