@@ -55,12 +55,13 @@ async function resolveRecursive(
   if (depth > maxDepth) return;
 
   let resolvedVersion = versionRange;
+  let cachedMeta: Awaited<ReturnType<typeof fetchFullMeta>> | null = null;
 
   // If it looks like a range rather than an exact version, resolve it
   if (versionRange.match(/[^.\d]/) || versionRange === "latest") {
     try {
-      const meta = await fetchFullMeta(name);
-      const available = Object.keys(meta.versions);
+      cachedMeta = await fetchFullMeta(name);
+      const available = Object.keys(cachedMeta.versions);
       const resolved = resolveRange(versionRange, available);
       if (!resolved) return;
       resolvedVersion = resolved;
@@ -84,13 +85,16 @@ async function resolveRecursive(
     return;
   }
 
-  // Fetch full meta to get dependency list
+  // Reuse cached full meta if already fetched for range resolution, otherwise fetch now
   try {
-    const meta = await fetchFullMeta(name);
+    const meta = cachedMeta ?? (await fetchFullMeta(name));
     const versionData = meta.versions[resolvedVersion] as
-      | { dependencies?: Record<string, string> }
+      | { dependencies?: Record<string, string>; optionalDependencies?: Record<string, string> }
       | undefined;
-    const deps = versionData?.dependencies ?? {};
+    const deps = {
+      ...(versionData?.dependencies ?? {}),
+      ...(versionData?.optionalDependencies ?? {}),
+    };
 
     await Promise.all(
       Object.entries(deps).map(([depName, depRange]) =>
