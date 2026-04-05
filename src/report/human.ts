@@ -27,7 +27,10 @@ function severityColor(sev: Severity): string {
 
 function renderFinding(finding: Finding): string {
   const lines: string[] = [];
-  const sevLabel = c(severityColor(finding.severity), `[${finding.category}/${finding.severity}]`);
+  const confSuffix = finding.confidence !== "high"
+    ? c(DIM, `/${finding.confidence}-confidence`)
+    : "";
+  const sevLabel = c(severityColor(finding.severity), `[${finding.category}/${finding.severity}${confSuffix}]`);
   lines.push(`  ${sevLabel} in ${c(CYAN, finding.source)}`);
   lines.push(`  Pattern: ${c(BOLD, finding.pattern)}`);
 
@@ -54,8 +57,20 @@ function renderAdvisory(advisory: AdvisoryMatch): string {
   return lines.join("\n");
 }
 
+function riskColor(risk: import("../types.js").RiskLevel): string {
+  if (NO_COLOR) return "";
+  switch (risk) {
+    case "critical": return RED + BOLD;
+    case "high":     return RED;
+    case "medium":   return YELLOW;
+    case "low":      return DIM;
+    case "verified": return GREEN;
+  }
+}
+
 function renderPackage(pkg: PackageReport): string {
   const lines: string[] = [];
+  const riskBadge = c(riskColor(pkg.risk), `[risk:${pkg.risk}]`);
 
   const srcBadge = pkg.source.type !== "registry"
     ? c(YELLOW, `[${pkg.source.type.toUpperCase()}]`) + " "
@@ -104,7 +119,7 @@ function renderPackage(pkg: PackageReport): string {
       : "";
 
   lines.push(
-    `\n${c(BOLD, `${pkg.name}@${pkg.version}`)}  ` +
+    `\n${c(BOLD, `${pkg.name}@${pkg.version}`)}  ${riskBadge}  ` +
     srcBadge + integrityBadge + deprecatedBadge + newScript +
     maintainers + downloads + sigBadge + publisherBadge +
     noProvenance + attestationBadge

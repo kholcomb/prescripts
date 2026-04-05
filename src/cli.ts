@@ -16,7 +16,9 @@ import {
 } from "./registry/client.js";
 import { setRegistryConcurrency } from "./registry/rate-limiter.js";
 import { fetchAdvisories } from "./registry/advisory.js";
-import type { PackageReport, PackageRef, ScanOptions, Severity, Finding, AdvisoryMatch, LifecycleScripts } from "./types.js";
+import { scoreFindings, applyBinaryDownloaderCluster, computeRisk } from "./analyzer/confidence.js";
+import { loadConfig } from "./config.js";
+import type { PackageReport, PackageRef, ScanOptions, Severity, Finding, AdvisoryMatch, LifecycleScripts, RiskLevel } from "./types.js";
 import { writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
@@ -96,6 +98,7 @@ async function scanRef(
           source: "manifest confusion: tarball vs. registry manifest",
           category: "manifest_confusion",
           severity: "critical",
+          confidence: "medium",
           pattern: registryValue === undefined
             ? "script present in tarball but absent from registry manifest"
             : "script value differs between tarball and registry manifest",
@@ -115,6 +118,7 @@ async function scanRef(
       source: "provenance attestation",
       category: "provenance_regression",
       severity: "high",
+      confidence: "medium",
       pattern: "attestation absent (present in previous version)",
       excerpt: {
         _warning: "UNTRUSTED THIRD-PARTY CONTENT",
@@ -132,6 +136,7 @@ async function scanRef(
       source: "tarball integrity check",
       category: "integrity_mismatch",
       severity: "critical",
+      confidence: "medium",
       pattern: "hash mismatch",
       excerpt: {
         _warning: "UNTRUSTED THIRD-PARTY CONTENT",
@@ -139,6 +144,11 @@ async function scanRef(
       },
     });
   }
+
+  // Post-process findings: cluster detection → confidence scoring → risk
+  const clustered = applyBinaryDownloaderCluster(findings, binaryDownload);
+  const scored = scoreFindings(clustered, provenance, opts.trust);
+  const risk = computeRisk(scored, advisories, provenance);
 
   return {
     name: ref.name,
@@ -153,7 +163,8 @@ async function scanRef(
     lifecycleScripts,
     binaryDownload,
     advisories,
-    findings,
+    findings: scored,
+    risk,
   };
 }
 
@@ -182,11 +193,18 @@ export async function runScan(dir: string, opts: ScanOptions): Promise<number> {
   setRequestTimeout(opts.timeout);
   setRegistryConcurrency(opts.concurrency);
 
-  const cache = new DiskCache(opts.cacheDir);
+  const fileConfig = await loadConfig(projectDir);
+  const mergedOpts: ScanOptions = {
+    ...opts,
+    trust: opts.trust ?? fileConfig.trust,
+    minRisk: opts.minRisk ?? fileConfig.minRisk,
+  };
+
+  const cache = new DiskCache(mergedOpts.cacheDir);
   const refs = await parseLockfile(projectDir);
 
   // Batch advisory lookup — one request for all packages before the scan loop
-  const advisoryMap = await fetchAdvisories(refs, opts.registry);
+  const advisoryMap = await fetchAdvisories(refs, mergedOpts.registry);
 
   const limit = pLimit(opts.concurrency);
   let completed = 0;
@@ -198,10 +216,10 @@ export async function runScan(dir: string, opts: ScanOptions): Promise<number> {
     refs.map((ref) =>
       limit(async () => {
         try {
-          const report = await scanRef(ref, opts, cache, projectDir, advisoryMap);
+          const report = await scanRef(ref, mergedOpts, cache, projectDir, advisoryMap);
           if (report) reports.push(report);
         } catch (err) {
-          if (opts.verbose) {
+          if (mergedOpts.verbose) {
             process.stderr.write(`\nError scanning ${ref.name}@${ref.version}: ${String(err)}\n`);
           }
         } finally {
@@ -214,8 +232,8 @@ export async function runScan(dir: string, opts: ScanOptions): Promise<number> {
 
   clearProgress();
 
-  const project = buildProjectReport(reports, "scan", opts.onlyFlagged);
-  await writeOutput(project, opts);
+  const project = buildProjectReport(reports, "scan", mergedOpts.onlyFlagged, mergedOpts.minRisk);
+  await writeOutput(project, mergedOpts);
 
   return project.flaggedPackages > 0 ? 1 : 0;
 }
@@ -236,10 +254,17 @@ export async function runCheck(
     ? (packageSpec.slice(1).split("@")[1] ?? "latest")
     : version;
 
-  const cache = new DiskCache(opts.cacheDir);
-  const refs = await resolveTree(resolvedName, resolvedVersion, opts.depth);
+  const fileConfig = await loadConfig(process.cwd());
+  const mergedOpts: ScanOptions = {
+    ...opts,
+    trust: opts.trust ?? fileConfig.trust,
+    minRisk: opts.minRisk ?? fileConfig.minRisk,
+  };
 
-  const advisoryMap = await fetchAdvisories(refs, opts.registry);
+  const cache = new DiskCache(mergedOpts.cacheDir);
+  const refs = await resolveTree(resolvedName, resolvedVersion, mergedOpts.depth);
+
+  const advisoryMap = await fetchAdvisories(refs, mergedOpts.registry);
 
   const limit = pLimit(opts.concurrency);
   let completed = 0;
@@ -250,10 +275,10 @@ export async function runCheck(
     refs.map((ref) =>
       limit(async () => {
         try {
-          const report = await scanRef(ref, opts, cache, process.cwd(), advisoryMap);
+          const report = await scanRef(ref, mergedOpts, cache, process.cwd(), advisoryMap);
           if (report) reports.push(report);
         } catch (err) {
-          if (opts.verbose) {
+          if (mergedOpts.verbose) {
             process.stderr.write(`\nError scanning ${ref.name}@${ref.version}: ${String(err)}\n`);
           }
         } finally {
@@ -266,8 +291,8 @@ export async function runCheck(
 
   clearProgress();
 
-  const project = buildProjectReport(reports, "check", opts.onlyFlagged);
-  await writeOutput(project, opts);
+  const project = buildProjectReport(reports, "check", mergedOpts.onlyFlagged, mergedOpts.minRisk);
+  await writeOutput(project, mergedOpts);
 
   return project.flaggedPackages > 0 ? 1 : 0;
 }
@@ -302,6 +327,7 @@ async function writeOutput(
 
 interface CliScanOptions {
   severity: Severity;
+  minRisk: RiskLevel;
   onlyFlagged: boolean;
   concurrency: string;
   registry: string;
@@ -319,6 +345,7 @@ interface CliScanOptions {
 function parseOpts(raw: CliScanOptions): ScanOptions {
   return {
     severity: raw.severity,
+    minRisk: raw.minRisk ?? "low",
     onlyFlagged: raw.onlyFlagged,
     concurrency: parseInt(raw.concurrency, 10),
     registry: raw.registry,
@@ -331,6 +358,7 @@ function parseOpts(raw: CliScanOptions): ScanOptions {
     sarif: raw.sarif,
     output: raw.output ?? null,
     apiUrl: raw.apiUrl ?? null,
+    trust: { signed: true, attested: true, minWeeklyDownloads: 10_000, minVersions: 10 },
   };
 }
 
@@ -350,6 +378,11 @@ export function buildProgram(): Command {
       .option("-j, --json", "Output JSON report to stdout", false)
       .option("--sarif", "Output SARIF 2.1.0 report (for GitHub Actions upload-sarif)", false)
       .option("-o, --output <file>", "Write report to file (format determined by --json/--sarif)")
+      .option(
+        "--min-risk <level>",
+        "Minimum risk level to surface: verified|low|medium|high|critical",
+        "low"
+      )
       .option(
         "--severity <level>",
         "Minimum severity: low|medium|high|critical",

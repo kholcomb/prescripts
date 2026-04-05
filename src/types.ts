@@ -6,6 +6,8 @@ export type SourceType =
   | "local";
 
 export type Severity = "critical" | "high" | "medium" | "low";
+export type Confidence = "high" | "medium" | "low";
+export type RiskLevel = "critical" | "high" | "medium" | "low" | "verified";
 
 export interface PackageRef {
   name: string;
@@ -81,6 +83,9 @@ export interface Finding {
   source: string;
   category: string;
   severity: Severity;
+  /** Confidence that this finding is genuinely malicious, given provenance context.
+   *  Set to "medium" by the scanner; updated by confidence scoring in cli.ts. */
+  confidence: Confidence;
   pattern: string;
   excerpt: Excerpt;
 }
@@ -101,6 +106,23 @@ export interface AdvisoryMatch {
   cvssScore: number | null;
 }
 
+export interface TrustConfig {
+  /** Reduce confidence for ECDSA-signed packages. Default: true */
+  signed: boolean;
+  /** Reduce confidence for Sigstore-attested packages. Default: true */
+  attested: boolean;
+  /** Weekly download count above which a package is considered "popular". Default: 10000 */
+  minWeeklyDownloads: number;
+  /** Version count above which a package is considered "mature". Default: 10 */
+  minVersions: number;
+}
+
+export interface NpmPrescriptsConfig {
+  /** Minimum risk level to surface in output. Default: "low" */
+  minRisk: RiskLevel;
+  trust: TrustConfig;
+}
+
 export interface PackageReport {
   name: string;
   version: string;
@@ -110,6 +132,8 @@ export interface PackageReport {
   binaryDownload: BinaryField | null;
   advisories: AdvisoryMatch[];
   findings: Finding[];
+  /** Aggregated risk level computed from findings + provenance. */
+  risk: RiskLevel;
 }
 
 export interface ProjectReport {
@@ -135,6 +159,7 @@ export interface CachedMeta {
 
 export interface ScanOptions {
   severity: Severity;
+  minRisk: RiskLevel;
   onlyFlagged: boolean;
   concurrency: number;
   registry: string;
@@ -147,4 +172,5 @@ export interface ScanOptions {
   sarif: boolean;
   output: string | null;
   apiUrl: string | null;
+  trust: TrustConfig;
 }

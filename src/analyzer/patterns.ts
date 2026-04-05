@@ -317,6 +317,16 @@ export const PATTERN_REGISTRY: ReadonlyArray<PatternDef> = [
     patterns: [], // emitted programmatically in cli.ts
   },
   {
+    // Emitted by cluster detection when prebuilt_binary + network + dynamic_exec
+    // co-occur in an install helper file. Replaces the individual findings with
+    // one named finding whose verification question is the download host.
+    category: "binary_downloader",
+    severity: "medium",
+    description:
+      "Package downloads a platform binary at install time — verify the download host",
+    patterns: [], // emitted programmatically by cluster detection in confidence.ts
+  },
+  {
     category: "integrity_mismatch",
     severity: "critical",
     description: "Downloaded content does not match expected integrity hash",

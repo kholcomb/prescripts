@@ -23,6 +23,7 @@ function makeReport(name: string, hasFindings: boolean): PackageReport {
     lifecycleScripts: { postinstall: "node setup.js" },
     binaryDownload: null,
     advisories: [],
+    risk: hasFindings ? "high" : "verified",
     findings: hasFindings
       ? [
           {
@@ -30,6 +31,7 @@ function makeReport(name: string, hasFindings: boolean): PackageReport {
             source: "postinstall script",
             category: "network",
             severity: "high",
+            confidence: "high",
             pattern: "curl",
             excerpt: {
               _warning: "UNTRUSTED THIRD-PARTY CONTENT",

@@ -62,6 +62,7 @@ function scanText(
           source,
           category: patternDef.category,
           severity: patternDef.severity,
+          confidence: "medium", // placeholder — scored against provenance in cli.ts
           pattern: match[0],
           excerpt: makeExcerpt(text, match.index),
         });
@@ -158,6 +159,7 @@ export function scanPackage(
         source: networkFinding.source,
         category: "env_exfil",
         severity: "critical",
+        confidence: "medium",
         pattern: "(env_probe + network co-occurrence)",
         excerpt: networkFinding.excerpt,
       });

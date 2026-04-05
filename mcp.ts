@@ -11,6 +11,7 @@ import type { ScanOptions } from "./src/types.js";
 
 const DEFAULT_OPTS: ScanOptions = {
   severity: "medium",
+  minRisk: "low",
   onlyFlagged: false,
   concurrency: 5,
   registry: "https://registry.npmjs.org",
@@ -23,6 +24,7 @@ const DEFAULT_OPTS: ScanOptions = {
   sarif: false,
   output: null,
   apiUrl: null,
+  trust: { signed: true, attested: true, minWeeklyDownloads: 10_000, minVersions: 10 },
 };
 
 const server = new Server(
