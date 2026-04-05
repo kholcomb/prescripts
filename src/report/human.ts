@@ -52,7 +52,12 @@ function renderAdvisory(advisory: AdvisoryMatch): string {
   const cveList = advisory.cves.length > 0 ? `  ${c(DIM, advisory.cves.join(", "))}` : "";
   const cvss = advisory.cvssScore !== null ? c(DIM, ` CVSS ${advisory.cvssScore.toFixed(1)}`) : "";
   lines.push(`  ${sevLabel} ${c(BOLD, advisory.title)}${cvss}`);
-  lines.push(`  Affects: ${c(DIM, advisory.vulnerableVersions)}${cveList}`);
+  lines.push(`  Vulnerable: ${c(DIM, advisory.vulnerableVersions)}${cveList}`);
+  if (advisory.patchedVersions) {
+    lines.push(`  ${c(GREEN, `Fix: upgrade to ${advisory.patchedVersions}`)}`);
+  } else {
+    lines.push(`  ${c(YELLOW, "Fix: no patched version available")}`);
+  }
   lines.push(`  ${c(CYAN, advisory.url)}`);
   return lines.join("\n");
 }

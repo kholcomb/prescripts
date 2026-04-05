@@ -102,6 +102,7 @@ export interface AdvisoryMatch {
   severity: Severity;
   url: string;
   vulnerableVersions: string;
+  patchedVersions: string | null;
   cves: string[];
   cvssScore: number | null;
 }

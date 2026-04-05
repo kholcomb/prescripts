@@ -151,6 +151,7 @@ export function toSarif(report: ProjectReport): string {
           advisory_id: advisory.id,
           cves: advisory.cves,
           vulnerable_versions: advisory.vulnerableVersions,
+          patched_versions: advisory.patchedVersions,
           cvss_score: advisory.cvssScore,
           advisory_url: advisory.url,
         },

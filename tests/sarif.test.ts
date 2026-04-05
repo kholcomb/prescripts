@@ -119,6 +119,7 @@ describe("toSarif", () => {
           severity: "high",
           url: "https://npmjs.com/advisories/1523",
           vulnerableVersions: "<4.17.19",
+          patchedVersions: ">=4.17.19",
           cves: ["CVE-2020-8203"],
           cvssScore: 7.4,
         },

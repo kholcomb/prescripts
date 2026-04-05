@@ -12,6 +12,7 @@ interface NpmAdvisory {
   severity: NpmSeverity;
   url: string;
   vulnerable_versions: string;
+  patched_versions?: string;
   cves?: string[];
   cvss?: { score?: number };
 }
@@ -73,6 +74,7 @@ export async function fetchAdvisories(
           severity: mapSeverity(a.severity),
           url: a.url,
           vulnerableVersions: a.vulnerable_versions,
+          patchedVersions: a.patched_versions ?? null,
           cves: a.cves ?? [],
           cvssScore: a.cvss?.score ?? null,
         }))
