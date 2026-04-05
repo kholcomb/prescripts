@@ -22,7 +22,7 @@ const DEFAULT_OPTS: ScanOptions = {
   verbose: false,
   json: true,
   sarif: false,
-  output: null,
+  outputDir: null,
   apiUrl: null,
   trust: { signed: true, attested: true, minWeeklyDownloads: 10_000, minVersions: 10 },
 };

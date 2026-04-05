@@ -171,7 +171,8 @@ export interface ScanOptions {
   verbose: boolean;
   json: boolean;
   sarif: boolean;
-  output: string | null;
+  /** Directory to write report.json and results.sarif. Human output still goes to stdout. */
+  outputDir: string | null;
   apiUrl: string | null;
   trust: TrustConfig;
 }
