@@ -172,8 +172,9 @@ export const PATTERN_REGISTRY: ReadonlyArray<PatternDef> = [
     description: "Dynamic require or import with non-literal argument",
     patterns: [
       // Exclude common benign patterns: path.join/__dirname/__filename/require.resolve
-      /require\s*\(\s*(?!path\.|__dirname|__filename|require\.resolve)[^'"`)]/,
-      /import\s*\(\s*(?!path\.|__dirname|__filename)[^'"`)]/,
+      // Also exclude aliased path imports (path2, path_, _path etc) — common in bundled code
+      /require\s*\(\s*(?!path[\w]*\.|__dirname|__filename|require\.resolve)[^'"`)]/,
+      /import\s*\(\s*(?!path[\w]*\.|__dirname|__filename)[^'"`)]/,
     ],
   },
   {
