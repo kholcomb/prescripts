@@ -3,7 +3,8 @@ import type {
   Excerpt,
   Severity,
 } from "../types.js";
-import { PATTERN_REGISTRY } from "./patterns.js";
+import { PATTERN_REGISTRY, SEVERITY_ORDER } from "./patterns.js";
+import type { PatternDef } from "./patterns.js";
 
 const CONTEXT_LINES = 3;
 
@@ -33,6 +34,71 @@ function makeExcerpt(text: string, matchIndex: number): Excerpt {
   };
 }
 
+// ── Source type classification ────────────────────────────────────────────────
+
+// Representative source strings for each distinct pattern-guard bucket.
+// Each is chosen so that running it through the sourceMatch/sourceExclude
+// guards in PATTERN_REGISTRY produces the correct applicable set.
+// Order in classifySource() matters: more specific checks come first.
+const SOURCE_TYPE_KEYS = [
+  "postinstall script",  // JS/npm lifecycle scripts and .js files (default)
+  "setup.py",            // Python source files (.py, setup.*, pyproject, .cfg)
+  "file.pth",            // Python .pth persistence files (site-packages hook)
+  "build.rs",            // Rust build scripts — superset of .rs, includes cargo_unsafe
+  "file.rs",             // Other Rust source files
+  "file.gemspec",        // Ruby gemspec files
+  "file.rb",             // Ruby source files
+  "rubygems_plugin.rb",  // Ruby plugin hook (executes on every gem command)
+] as const;
+
+type SourceTypeKey = typeof SOURCE_TYPE_KEYS[number];
+
+/**
+ * Maps a source string (lifecycle hook name or referenced file path) to the
+ * canonical bucket key used for pattern pre-grouping.
+ */
+function classifySource(source: string): SourceTypeKey {
+  if (/\.pth\b/.test(source))             return "file.pth";
+  if (/rubygems_plugin\.rb/.test(source)) return "rubygems_plugin.rb";
+  if (/build\.rs\b/.test(source))         return "build.rs";
+  if (/\.py\b|setup\.(?:py|cfg)\b|pyproject|\.cfg\b/.test(source)) return "setup.py";
+  if (/\.rs\b/.test(source))              return "file.rs";
+  if (/\.gemspec\b/.test(source))         return "file.gemspec";
+  if (/\.rb\b/.test(source))             return "file.rb";
+  return "postinstall script";
+}
+
+/**
+ * Pre-computed pattern subsets, built once at module load.
+ * Indexed as PATTERN_LOOKUP[minSeverity][sourceTypeKey].
+ *
+ * Eliminates the per-pattern sourceMatch / sourceExclude guard checks
+ * from the scan hot path — each scanText() call resolves its source
+ * to a bucket and iterates only the applicable subset.
+ */
+const PATTERN_LOOKUP = (() => {
+  const lookup = new Map<Severity, Map<SourceTypeKey, readonly PatternDef[]>>();
+  for (const severity of ["critical", "high", "medium", "low"] as Severity[]) {
+    const bySource = new Map<SourceTypeKey, readonly PatternDef[]>();
+    for (const sourceKey of SOURCE_TYPE_KEYS) {
+      bySource.set(
+        sourceKey,
+        PATTERN_REGISTRY.filter((def) => {
+          if (def.patterns.length === 0) return false;
+          if (SEVERITY_ORDER[def.severity] < SEVERITY_ORDER[severity]) return false;
+          if (def.sourceMatch && !def.sourceMatch.test(sourceKey)) return false;
+          if (def.sourceExclude && def.sourceExclude.test(sourceKey)) return false;
+          return true;
+        })
+      );
+    }
+    lookup.set(severity, bySource);
+  }
+  return lookup;
+})();
+
+// ── Scanner ───────────────────────────────────────────────────────────────────
+
 function scanText(
   text: string,
   source: string,
@@ -40,27 +106,10 @@ function scanText(
   minSeverity: Severity
 ): Finding[] {
   const findings: Finding[] = [];
-  const severityOrder: Record<Severity, number> = {
-    critical: 4,
-    high: 3,
-    medium: 2,
-    low: 1,
-  };
+  const sourceKey = classifySource(source);
+  const applicablePatterns = PATTERN_LOOKUP.get(minSeverity)!.get(sourceKey)!;
 
-  for (const patternDef of PATTERN_REGISTRY) {
-    if (patternDef.patterns.length === 0) continue;
-    if (severityOrder[patternDef.severity] < severityOrder[minSeverity]) {
-      continue;
-    }
-    // sourceMatch: only apply to matching sources (e.g. pth_persistence → .pth files only)
-    if (patternDef.sourceMatch && !patternDef.sourceMatch.test(source)) {
-      continue;
-    }
-    // sourceExclude: skip for matching sources (e.g. JS patterns skip .py files)
-    if (patternDef.sourceExclude && patternDef.sourceExclude.test(source)) {
-      continue;
-    }
-
+  for (const patternDef of applicablePatterns) {
     for (const regex of patternDef.patterns) {
       const match = regex.exec(text);
       if (match) {
