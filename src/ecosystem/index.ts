@@ -49,13 +49,10 @@ export const ECOSYSTEM_PLUGINS: EcosystemPlugin[] = [
  * Multiple plugins may match (polyglot projects).
  */
 export async function detectEcosystems(dir: string): Promise<EcosystemPlugin[]> {
-  const results: EcosystemPlugin[] = [];
-  for (const plugin of ECOSYSTEM_PLUGINS) {
-    if (await plugin.detectLockfile(dir)) {
-      results.push(plugin);
-    }
-  }
-  return results;
+  const flags = await Promise.all(
+    ECOSYSTEM_PLUGINS.map((plugin) => plugin.detectLockfile(dir))
+  );
+  return ECOSYSTEM_PLUGINS.filter((_, i) => flags[i]);
 }
 
 /**

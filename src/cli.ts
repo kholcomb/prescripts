@@ -23,9 +23,18 @@ import { spawn } from "node:child_process";
 
 // ── Generic scan helpers ──────────────────────────────────────────────────────
 
+interface ProgressState {
+  completed: number;
+  total: number;
+}
+
 /**
  * Runs the scan loop for a single ecosystem plugin against a set of refs.
  * Handles concurrency, progress output, and error reporting.
+ *
+ * When `sharedProgress` is provided the counters are shared across all
+ * concurrently-running ecosystems and the caller is responsible for calling
+ * clearProgress() after all ecosystems finish.
  */
 async function runEcosystemRefs(
   plugin: EcosystemPlugin,
@@ -33,11 +42,11 @@ async function runEcosystemRefs(
   opts: ScanOptions,
   cache: DiskCache,
   projectDir: string,
-  advisoryMap: Map<string, AdvisoryMatch[]>
+  advisoryMap: Map<string, AdvisoryMatch[]>,
+  sharedProgress?: ProgressState
 ): Promise<PackageReport[]> {
   const limit = pLimit(opts.concurrency);
-  let completed = 0;
-  const total = refs.length;
+  const progress = sharedProgress ?? { completed: 0, total: refs.length };
   const reports: PackageReport[] = [];
   const pmLabel = plugin.packageManager !== "npm" ? ` [${plugin.packageManager}]` : "";
 
@@ -54,14 +63,14 @@ async function runEcosystemRefs(
             );
           }
         } finally {
-          completed++;
-          renderProgress(completed, total, `${ref.name}@${ref.version}${pmLabel}`);
+          progress.completed++;
+          renderProgress(progress.completed, progress.total, `${ref.name}@${ref.version}${pmLabel}`);
         }
       })
     )
   );
 
-  clearProgress();
+  if (!sharedProgress) clearProgress();
   return reports;
 }
 
@@ -86,24 +95,45 @@ export async function runScan(dir: string, opts: ScanOptions): Promise<number> {
     return 2;
   }
 
-  const allReports: PackageReport[] = [];
+  // Phase 1: parse all lockfiles and fetch advisories in parallel
+  const ecosystemData = (await Promise.all(
+    plugins.map(async (plugin) => {
+      plugin.init(mergedOpts);
+      const parsed = await plugin.parseLockfile(projectDir);
+      if (!parsed) return null;
+      const { refs, lockfileDir } = parsed;
+      const advisoryMap = await plugin.fetchAdvisories(refs, mergedOpts);
+      return { plugin, refs, lockfileDir, advisoryMap };
+    })
+  )).filter((d) => d !== null);
 
-  for (const plugin of plugins) {
-    plugin.init(mergedOpts);
+  if (ecosystemData.length === 0) {
+    process.stderr.write("No packages found in detected lockfiles.\n");
+    return 2;
+  }
 
-    if (plugins.length > 1) {
+  if (plugins.length > 1) {
+    for (const { plugin } of ecosystemData) {
       process.stderr.write(`Scanning ${plugin.packageManager} packages...\n`);
     }
-
-    const parsed = await plugin.parseLockfile(projectDir);
-    if (!parsed) continue;
-
-    const { refs, lockfileDir } = parsed;
-    const cache = new DiskCache(mergedOpts.cacheDir);
-    const advisoryMap = await plugin.fetchAdvisories(refs, mergedOpts);
-    const reports = await runEcosystemRefs(plugin, refs, mergedOpts, cache, lockfileDir, advisoryMap);
-    allReports.push(...reports);
   }
+
+  // Phase 2: scan all ecosystems in parallel with a shared progress counter
+  const grandTotal = ecosystemData.reduce((n, d) => n + d.refs.length, 0);
+  const sharedProgress: ProgressState = { completed: 0, total: grandTotal };
+
+  const allReports = (await Promise.all(
+    ecosystemData.map(({ plugin, refs, lockfileDir, advisoryMap }) =>
+      runEcosystemRefs(
+        plugin, refs, mergedOpts,
+        new DiskCache(mergedOpts.cacheDir),
+        lockfileDir, advisoryMap,
+        sharedProgress
+      )
+    )
+  )).flat();
+
+  clearProgress();
 
   // Local file scanners (GitHub Actions, git submodules) — no registry, no packages
   const localReports = await runLocalScanners(projectDir, mergedOpts);
