@@ -74,7 +74,7 @@ async function scanRef(
 
   const lifecycleScripts = extractLifecycleScripts(packageJson);
   const binaryDownload = extractBinaryField(packageJson);
-  const advisories = advisoryMap.get(ref.name) ?? [];
+  const advisories = advisoryMap.get(`${ref.name}@${ref.version}`) ?? [];
 
   if (!hasLifecycleScripts(lifecycleScripts) && !binaryDownload && advisories.length === 0) {
     return null; // nothing to report
