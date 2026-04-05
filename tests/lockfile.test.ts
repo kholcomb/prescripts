@@ -49,7 +49,7 @@ describe("parseLockfile", () => {
 
   it("throws a clear error when no lockfile is present", async () => {
     await expect(parseLockfile("/nonexistent/path")).rejects.toThrow(
-      "No package-lock.json found"
+      "No package-lock.json or npm-shrinkwrap.json found"
     );
   });
 });

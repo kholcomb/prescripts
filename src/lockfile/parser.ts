@@ -52,13 +52,20 @@ function nameFromPackagePath(pkgPath: string): string {
 }
 
 export async function parseLockfile(dir: string): Promise<PackageRef[]> {
-  const lockfilePath = join(dir, "package-lock.json");
-  let raw: string;
-  try {
-    raw = await readFile(lockfilePath, "utf-8");
-  } catch {
+  // npm-shrinkwrap.json takes precedence over package-lock.json when both exist
+  // (mirrors npm's own resolution order)
+  let raw: string | undefined;
+  for (const filename of ["npm-shrinkwrap.json", "package-lock.json"]) {
+    try {
+      raw = await readFile(join(dir, filename), "utf-8");
+      break;
+    } catch {
+      // try next
+    }
+  }
+  if (!raw) {
     throw new Error(
-      `No package-lock.json found at ${lockfilePath}. ` +
+      `No package-lock.json or npm-shrinkwrap.json found in ${dir}. ` +
         `npm-prescripts requires an npm lockfile. ` +
         `For Yarn or pnpm projects, lockfile support is not yet implemented.`
     );
