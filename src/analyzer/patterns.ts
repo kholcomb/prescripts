@@ -5,9 +5,18 @@ export interface PatternDef {
   severity: Severity;
   patterns: RegExp[];
   description: string;
-  /** If set, only apply this pattern category when the scan source string matches.
-   *  Used to restrict e.g. pth_persistence patterns to .pth files only. */
+  /**
+   * If set, only apply this pattern when the source string matches.
+   * Use to restrict patterns to specific file types or contexts.
+   * Example: /\.pth\b/ restricts to .pth files only.
+   */
   sourceMatch?: RegExp;
+  /**
+   * If set, skip this pattern when the source string matches.
+   * Use to prevent language bleed — e.g. stop JS patterns from firing on .py files.
+   * Example: /\.py\b/ excludes Python source files.
+   */
+  sourceExclude?: RegExp;
 }
 
 export const PATTERN_REGISTRY: ReadonlyArray<PatternDef> = [
@@ -28,6 +37,8 @@ export const PATTERN_REGISTRY: ReadonlyArray<PatternDef> = [
     category: "network",
     severity: "high",
     description: "Network request in lifecycle script",
+    // Python files have dedicated python_network patterns — exclude to prevent bleed
+    sourceExclude: /\.py\b/,
     patterns: [
       /\bcurl\b/,
       /\bwget\b/,
@@ -41,6 +52,9 @@ export const PATTERN_REGISTRY: ReadonlyArray<PatternDef> = [
     category: "obfuscation",
     severity: "high",
     description: "Encoding or dynamic code evaluation",
+    // Python files have dedicated python_obfuscation patterns — exclude to prevent bleed.
+    // Specifically prevents exec(f.read(), about) (version-loading idiom) from matching.
+    sourceExclude: /\.py\b/,
     patterns: [
       /\beval\s*\(/,
       /\bFunction\s*\(/,
@@ -71,6 +85,10 @@ export const PATTERN_REGISTRY: ReadonlyArray<PatternDef> = [
     category: "dynamic_exec",
     severity: "high",
     description: "Dynamic process execution",
+    // Python files have dedicated python_exec / python_shell_exec patterns.
+    // Excludes Python to prevent: exec(f.read(), about) version-loading false positive,
+    // and subprocess.*() being caught by both JS and Python patterns simultaneously.
+    sourceExclude: /\.py\b/,
     patterns: [
       /\bchild_process\b/,
       /\bexecSync\s*\(/,
@@ -339,10 +357,17 @@ export const PATTERN_REGISTRY: ReadonlyArray<PatternDef> = [
   // ── Python-specific patterns ────────────────────────────────────────────────
 
   {
+    // medium: broad subprocess detection. Fires on legitimate patterns like
+    // subprocess.check_output([sys.executable, 'build/version.py']) (numpy-style
+    // version detection) and subprocess.run(['git', 'describe', ...]).
+    // Provenance scoring will lower confidence for mature, popular packages.
+    // Use python_shell_exec for high-confidence dangerous subprocess patterns.
     category: "python_exec",
-    severity: "high",
-    description: "Dynamic process execution in Python install hook",
+    severity: "medium",
+    description: "Subprocess or os.system call in Python install hook",
+    sourceMatch: /\.py\b|setup\.|pyproject|\.cfg\b/,
     patterns: [
+      // Generic subprocess — many legitimate uses (version detection, build tooling)
       /\bsubprocess\.(?:run|call|check_output|check_call|Popen)\s*\(/,
       /\bos\.system\s*\(/,
       /\bos\.popen\s*\(/,
@@ -351,9 +376,27 @@ export const PATTERN_REGISTRY: ReadonlyArray<PatternDef> = [
     ],
   },
   {
+    // high: subprocess specifically invoking shell/network tools, or using shell=True.
+    // shell=True passes the command to /bin/sh — combines process exec with shell injection risk.
+    // Calling curl/wget/nc/bash from a setup.py has almost no legitimate install-time use.
+    category: "python_shell_exec",
+    severity: "high",
+    description: "Subprocess calling shell or network tool — high-confidence dangerous pattern",
+    sourceMatch: /\.py\b|setup\.|pyproject|\.cfg\b/,
+    patterns: [
+      // shell=True with subprocess — executes as a shell command (injection vector)
+      /\bsubprocess\.(?:run|call|Popen)\s*\([^)]*\bshell\s*=\s*True/,
+      // subprocess calling network/shell tools directly (first arg is the tool name)
+      /\bsubprocess\.(?:run|call|check_output|Popen)\s*\(\s*\[?\s*["'](?:bash|sh|curl|wget|nc|ncat|netcat|powershell)['"]/,
+      // os.system calling network tools
+      /\bos\.system\s*\(\s*f?["'][^'"]*(?:curl|wget|bash\s+-c|nc\s)/,
+    ],
+  },
+  {
     category: "python_network",
     severity: "high",
     description: "Network request in Python install hook",
+    sourceMatch: /\.py\b|setup\.|pyproject|\.cfg\b/,
     patterns: [
       /\burllib(?:\.request)?\.urlopen\s*\(/,
       /\burllib\.request\.urlretrieve\s*\(/,
@@ -368,6 +411,7 @@ export const PATTERN_REGISTRY: ReadonlyArray<PatternDef> = [
     category: "python_obfuscation",
     severity: "high",
     description: "Encoding or dynamic code evaluation in Python",
+    sourceMatch: /\.py\b|setup\.|pyproject|\.cfg\b/,
     patterns: [
       // exec with base64-decoded payload — classic attack vector
       /\bexec\s*\(\s*base64\.b64decode\s*\(/,
@@ -412,6 +456,7 @@ export const PATTERN_REGISTRY: ReadonlyArray<PatternDef> = [
     category: "python_credential_files",
     severity: "high",
     description: "Reads Python-ecosystem credential files",
+    sourceMatch: /\.py\b|setup\.|pyproject|\.cfg\b/,
     patterns: [
       /~\/\.pypirc\b/,         // PyPI upload credentials
       /pip\.conf\b/,           // pip configuration (may contain index credentials)
@@ -423,6 +468,7 @@ export const PATTERN_REGISTRY: ReadonlyArray<PatternDef> = [
     category: "python_ctypes",
     severity: "high",
     description: "Loads native code via ctypes or cffi — executes outside Python sandbox",
+    sourceMatch: /\.py\b|setup\.|pyproject|\.cfg\b/,
     patterns: [
       /\bctypes\.(?:cdll|windll|oledll)\.LoadLibrary\s*\(/,
       /\bctypes\.CDLL\s*\(/,

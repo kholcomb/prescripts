@@ -15,11 +15,17 @@ import type {
 // rather than behavioral patterns that could have innocent explanations.
 const ALWAYS_HIGH_CONFIDENCE = new Set([
   "integrity_mismatch",
+  "lockfile_poisoning",       // lockfile integrity ≠ registry dist.integrity
+  "signature_invalid",        // npm ECDSA registry signature failed verification
+  "attestation_subject_mismatch", // attested tarball ≠ downloaded tarball
+  "attestation_invalid",          // Sigstore chain verification failed (fabricated/tampered bundle)
   "advisory_match",
   "manifest_confusion",
   "reverse_shell",
   "cryptomining",
   "system_recon",
+  "python_shell_exec",        // subprocess calling curl/wget/bash/nc, or shell=True
+  "pth_persistence",          // .pth file with executable code — persistence mechanism
 ]);
 
 // Categories where provenance trust signals have more weight —
@@ -53,6 +59,23 @@ function provenanceScore(provenance: ProvenanceInfo, trust: TrustConfig): number
   if (provenance.attestationRegressed === true) score += 3;
   if (provenance.deprecated !== null) score += 2;
   if (provenance.publisherInMaintainers === false) score += 2;
+  if (provenance.publisherIsNewToPackage === true) score += 2;
+
+  // Version velocity: many versions published in a short window signals farming
+  // Use only when ≥5 versions exist to avoid noise on genuinely new packages
+  if (
+    provenance.firstPublishedAt &&
+    provenance.publishedAt &&
+    (provenance.totalVersions ?? 0) >= 5
+  ) {
+    const ageMs =
+      new Date(provenance.publishedAt).getTime() -
+      new Date(provenance.firstPublishedAt).getTime();
+    const ageDays = ageMs / (1000 * 60 * 60 * 24);
+    const velocity = (provenance.totalVersions ?? 1) / Math.max(1, ageDays);
+    if (velocity > 10) score += 2; // e.g. 20 versions in 2 days
+    else if (velocity > 3) score += 1; // e.g. 10 versions in 3 days
+  }
 
   // ─── Downward signals (increases trust) ───
   if (trust.attested && provenance.attestation !== null) score -= 2;

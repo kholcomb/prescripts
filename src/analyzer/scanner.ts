@@ -52,8 +52,12 @@ function scanText(
     if (severityOrder[patternDef.severity] < severityOrder[minSeverity]) {
       continue;
     }
-    // sourceMatch restricts this pattern to specific source types (e.g. .pth files only)
+    // sourceMatch: only apply to matching sources (e.g. pth_persistence → .pth files only)
     if (patternDef.sourceMatch && !patternDef.sourceMatch.test(source)) {
+      continue;
+    }
+    // sourceExclude: skip for matching sources (e.g. JS patterns skip .py files)
+    if (patternDef.sourceExclude && patternDef.sourceExclude.test(source)) {
       continue;
     }
 
