@@ -161,7 +161,7 @@ export class PipPlugin implements EcosystemPlugin {
     return hasPythonHooks(hooks);
   }
 
-  async fetchProvenance(ref: PackageRef, _opts: ScanOptions): Promise<ProvenanceFetchResult> {
+  async fetchProvenance(ref: PackageRef, opts: ScanOptions): Promise<ProvenanceFetchResult> {
     const meta = await fetchPyPIMeta(ref.name, ref.version);
 
     if (!meta) {
@@ -173,14 +173,17 @@ export class PipPlugin implements EcosystemPlugin {
       };
     }
 
-    // Fetch PEP 740 attestation using the filename from the selected tarball/wheel URL.
-    // fetchPyPIProvenance short-circuits to null on private indexes — safe to always call.
+    // Fetch PEP 740 attestation from the PyPI integrity API.
+    // The attestation endpoint is always on pypi.org regardless of which index
+    // the package was installed from — a 404 simply means no attestation exists.
+    // Skip when pypiAttestations: false is set (air-gapped environments).
     const filename = meta.tarballUrl.split("/").pop() ?? "";
-    const attestation = filename
-      ? await parsePyPIAttestation(
-          await fetchPyPIProvenance(ref.name, ref.version, filename)
-        )
-      : null;
+    const attestation =
+      filename && opts.pypiAttestations !== false
+        ? await parsePyPIAttestation(
+            await fetchPyPIProvenance(ref.name, ref.version, filename)
+          )
+        : null;
 
     // Regression check: only needed when the current version lacks attestation.
     // If it has one, regression is impossible. If there's no previous version to

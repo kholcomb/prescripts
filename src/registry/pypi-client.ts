@@ -397,19 +397,17 @@ export async function fetchWithProxyRaw(url: string, timeout: number): Promise<B
  * Requires Accept: application/vnd.pypi.integrity.v1+json
  *
  * Returns the parsed JSON body as an opaque value (parsing is the caller's
- * responsibility) or null on any failure.
+ * responsibility) or null on any failure (including 404 when no attestation exists).
  *
- * Short-circuits to null when a private index is configured — corporate mirrors
- * (Artifactory, Nexus, Devpi) do not serve this endpoint.
+ * Always hits the public PyPI integrity API — attestation data is published to
+ * pypi.org regardless of which index a package was installed from. A 404 simply
+ * means this release has no attestation, not that the package is from a mirror.
  */
 export async function fetchPyPIProvenance(
   name: string,
   version: string,
   filename: string
 ): Promise<unknown | null> {
-  // Only the public PyPI registry serves the integrity API
-  if (getPyPIBase() !== "https://pypi.org") return null;
-
   const url = `https://pypi.org/integrity/${encodeURIComponent(name)}/${encodeURIComponent(version)}/${encodeURIComponent(filename)}/provenance`;
 
   try {

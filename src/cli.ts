@@ -84,6 +84,7 @@ export async function runScan(dir: string, opts: ScanOptions): Promise<number> {
     ...opts,
     trust: opts.trust ?? fileConfig.trust,
     minRisk: opts.minRisk ?? fileConfig.minRisk,
+    pypiAttestations: opts.pypiAttestations ?? fileConfig.pypiAttestations,
   };
 
   const plugins = await detectEcosystems(projectDir);
@@ -163,6 +164,7 @@ export async function runCheck(
     ...opts,
     trust: opts.trust ?? fileConfig.trust,
     minRisk: opts.minRisk ?? fileConfig.minRisk,
+    pypiAttestations: opts.pypiAttestations ?? fileConfig.pypiAttestations,
   };
 
   const refs = await plugin.resolveCheckSpec(packageSpec, mergedOpts);
@@ -212,6 +214,7 @@ export async function runFix(dir: string, opts: ScanOptions, apply: boolean): Pr
     ...opts,
     trust: opts.trust ?? fileConfig.trust,
     minRisk: opts.minRisk ?? fileConfig.minRisk,
+    pypiAttestations: opts.pypiAttestations ?? fileConfig.pypiAttestations,
   };
 
   const cache = new DiskCache(mergedOpts.cacheDir);
@@ -599,6 +602,7 @@ function parseOpts(raw: CliScanOptions): ScanOptions {
     outputDir: raw.outputDir ?? null,
     apiUrl: raw.apiUrl ?? null,
     trust: { signed: true, attested: true, minWeeklyDownloads: 10_000, minVersions: 10 },
+    pypiAttestations: true,
   };
 }
 

@@ -149,6 +149,12 @@ export interface NpmPrescriptsConfig {
   /** Minimum risk level to surface in output. Default: "low" */
   minRisk: RiskLevel;
   trust: TrustConfig;
+  /**
+   * Whether to attempt PEP 740 attestation fetches from the PyPI integrity API.
+   * Set to false in air-gapped environments where pypi.org is unreachable.
+   * Default: true
+   */
+  pypiAttestations: boolean;
 }
 
 export interface PackageReport {
@@ -204,4 +210,10 @@ export interface ScanOptions {
   outputDir: string | null;
   apiUrl: string | null;
   trust: TrustConfig;
+  /**
+   * Whether to attempt PEP 740 attestation fetches from the PyPI integrity API.
+   * Set to false in air-gapped environments where pypi.org is unreachable.
+   * Default: true
+   */
+  pypiAttestations: boolean;
 }

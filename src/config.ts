@@ -8,6 +8,7 @@ const CONFIG_FILE = ".npm-prescriptsrc.json";
 interface RawConfig {
   minRisk?: RiskLevel;
   trust?: Partial<TrustConfig>;
+  pypiAttestations?: boolean;
 }
 
 const VALID_RISK_LEVELS = new Set<RiskLevel>([
@@ -32,9 +33,11 @@ export async function loadConfig(dir: string): Promise<NpmPrescriptsConfig> {
       minVersions: parsed.trust?.minVersions ?? DEFAULT_TRUST.minVersions,
     };
 
-    return { minRisk, trust };
+    const pypiAttestations = parsed.pypiAttestations !== false;
+
+    return { minRisk, trust, pypiAttestations };
   } catch {
     // File not found or invalid JSON — use defaults silently
-    return { minRisk: DEFAULT_MIN_RISK, trust: DEFAULT_TRUST };
+    return { minRisk: DEFAULT_MIN_RISK, trust: DEFAULT_TRUST, pypiAttestations: true };
   }
 }
