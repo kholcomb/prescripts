@@ -177,6 +177,10 @@ export interface ProjectReport {
   mode: "scan" | "check";
   totalPackages: number;
   flaggedPackages: number;
+  /** Packages with install-time threats or patchable advisories — drives the default exit code. */
+  actionablePackages: number;
+  /** Packages with only unpatched runtime advisories — informational, no fix available upstream. */
+  monitorPackages: number;
   packages: PackageReport[];
 }
 
@@ -210,6 +214,8 @@ export interface ScanOptions {
   outputDir: string | null;
   apiUrl: string | null;
   trust: TrustConfig;
+  /** Exit 1 for any flagged package, not just actionable ones. Default: false */
+  strict: boolean;
   /**
    * Whether to attempt PEP 740 attestation fetches from the PyPI integrity API.
    * Set to false in air-gapped environments where pypi.org is unreachable.

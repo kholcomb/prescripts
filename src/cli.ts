@@ -142,7 +142,7 @@ export async function runScan(dir: string, opts: ScanOptions): Promise<number> {
 
   const project = buildProjectReport(allReports, "scan", mergedOpts.onlyFlagged, mergedOpts.minRisk);
   await writeOutput(project, mergedOpts);
-  return project.flaggedPackages > 0 ? 1 : 0;
+  return (mergedOpts.strict ? project.flaggedPackages : project.actionablePackages) > 0 ? 1 : 0;
 }
 
 /**
@@ -179,7 +179,7 @@ export async function runCheck(
 
   const project = buildProjectReport(reports, "check", mergedOpts.onlyFlagged, mergedOpts.minRisk);
   await writeOutput(project, mergedOpts);
-  return project.flaggedPackages > 0 ? 1 : 0;
+  return (mergedOpts.strict ? project.flaggedPackages : project.actionablePackages) > 0 ? 1 : 0;
 }
 
 /**
@@ -583,6 +583,7 @@ interface CliScanOptions {
   sarif: boolean;
   outputDir?: string;
   apiUrl?: string;
+  strict: boolean;
 }
 
 function parseOpts(raw: CliScanOptions): ScanOptions {
@@ -603,6 +604,7 @@ function parseOpts(raw: CliScanOptions): ScanOptions {
     apiUrl: raw.apiUrl ?? null,
     trust: { signed: true, attested: true, minWeeklyDownloads: 10_000, minVersions: 10 },
     pypiAttestations: true,
+    strict: raw.strict ?? false,
   };
 }
 
@@ -644,7 +646,12 @@ export function buildProgram(): Command {
       .option("--registry <url>", "npm registry URL", "https://registry.npmjs.org")
       .option("--timeout <ms>", "Per-request timeout in milliseconds", "30000")
       .option("--api-url <url>", "Hosted npm-prescripts-api URL (optional)")
-      .option("-v, --verbose", "Debug output to stderr", false);
+      .option("-v, --verbose", "Debug output to stderr", false)
+      .option(
+        "--strict",
+        "Exit 1 for any flagged package, including unpatched advisories with no fix available",
+        false
+      );
 
   sharedOptions(
     program
@@ -711,6 +718,7 @@ export function buildProgram(): Command {
             sarif: false,
             verbose: false,
             depth: "5",
+            strict: false,
             ...opts,
           });
           const code = await runFix(dir ?? ".", scanOpts, opts.apply);

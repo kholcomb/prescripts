@@ -167,10 +167,18 @@ export function renderReport(report: ProjectReport, onlyFlagged: boolean): void 
     out.write(renderPackage(pkg) + "\n");
   }
 
+  const col = 20;
+  const row = (label: string, value: string) =>
+    `  ${label.padEnd(col)}${value}`;
+
+  const actionable = report.actionablePackages;
+  const monitor = report.monitorPackages;
+
   const summary = [
     `\n${c(BOLD, "Summary:")}`,
-    `  Packages scanned:  ${report.totalPackages}`,
-    `  Packages flagged:  ${report.flaggedPackages > 0 ? c(RED, String(report.flaggedPackages)) : c(GREEN, "0")}`,
+    row("Packages scanned:", String(report.totalPackages)),
+    row("Requires action:", actionable > 0 ? c(RED, String(actionable)) : c(GREEN, "0")),
+    row("Monitor only:", monitor > 0 ? c(YELLOW, `${monitor}  ${c(DIM, "(unpatched advisories — no upstream fix)")}`) : c(GREEN, "0")),
   ].join("\n");
 
   out.write(summary + "\n");

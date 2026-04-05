@@ -26,6 +26,7 @@ const DEFAULT_OPTS: ScanOptions = {
   apiUrl: null,
   trust: { signed: true, attested: true, minWeeklyDownloads: 10_000, minVersions: 10 },
   pypiAttestations: true,
+  strict: false,
 };
 
 const server = new Server(
