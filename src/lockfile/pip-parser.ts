@@ -11,7 +11,7 @@
  */
 
 import { readFile, readdir } from "node:fs/promises";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import type { PackageRef } from "../types.js";
 
 export interface ParseResult {
@@ -169,38 +169,125 @@ function parsePoetryLock(raw: string): PackageRef[] {
 // ── requirements.txt ─────────────────────────────────────────────────────────
 
 /**
+ * Join backslash-continued lines before parsing.
+ * Per the pip spec, a line ending in `\` continues on the next line.
+ */
+function joinContinuations(raw: string): string {
+  return raw.replace(/\\\n/g, " ");
+}
+
+/**
  * Parse a requirements.txt file into PackageRefs.
  *
  * Handles:
- *   name==1.2.3          exact pins (most common in lockfiles)
- *   name[extra]==1.2.3   extras
- *   name>=1.2.3          ranges (included but warn: not an exact pin)
- *   # comments, blank lines, -r includes, -i index-url (skipped)
+ *   name==1.2.3                     exact pin
+ *   name[extra]==1.2.3              extras
+ *   name>=1.2.3,<2.0                version ranges
+ *   name==1.2.3 --hash=sha256:abc   hash-pinned (pip --require-hashes)
+ *   # comments, blank lines         skipped
+ *   -r other.txt, -c constraints    skipped (followed separately by caller)
+ *   https://..., git+https://...    skipped (no PyPI lookup)
+ *   \ line continuations            joined before parsing
  */
 function parseRequirementsTxt(raw: string): PackageRef[] {
   const refs: PackageRef[] = [];
-  for (const rawLine of raw.split("\n")) {
+
+  for (const rawLine of joinContinuations(raw).split("\n")) {
     const line = rawLine.trim();
-    if (!line || line.startsWith("#") || line.startsWith("-")) continue;
+    if (!line || line.startsWith("#")) continue;
 
-    // Strip inline comments
-    const withoutComment = line.split(" #")[0]!.trim();
-    // Strip environment markers (e.g. requests>=2.0 ; python_version>"3.0")
-    const withoutMarker = withoutComment.split(";")[0]!.trim();
+    // Options and URL schemes — not installable from PyPI
+    if (
+      line.startsWith("-") ||
+      /^https?:\/\//i.test(line) ||
+      /^(git|svn|hg|bzr)\+/i.test(line) ||
+      line.startsWith("file://") ||
+      line.startsWith("./") ||
+      line.startsWith("../")
+    ) continue;
 
-    // Extract name and optional version: name[extra]<op>version
-    // Matches: requests==2.28.0, requests[security]==2.28.0, requests>=2.28.0, etc.
+    // Strip inline comment (space + # not inside a marker)
+    const withoutComment = line.replace(/\s+#[^'"\[]*$/, "").trim();
+
+    // Extract --hash=sha256:<hex> values (may be multiple, take first sha256)
+    const hashMatch = /--hash=sha256:([a-fA-F0-9]{64})/i.exec(withoutComment);
+    const integrity = hashMatch ? `sha256:${hashMatch[1]!}` : null;
+
+    // Strip --options (hash directives, --global-option, etc.) from the spec
+    const specOnly = withoutComment.replace(/\s+--\S+/g, "").trim();
+
+    // Strip environment markers (everything after unquoted `;`)
+    const withoutMarker = specOnly.split(/\s*;\s*/)[0]!.trim();
+
+    // Extract name and version: name[extra]<op>version[,<op>version...]
     const match = withoutMarker.match(
-      /^([A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?)(?:\[[^\]]*\])?(?:==|>=|~=|!=|<=|>|<)(.+)$/
+      /^([A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?)(?:\[[^\]]*\])?([=!<>~,][^\s]+)?$/
     );
     if (!match) continue;
 
     const name = match[1]!.toLowerCase().replace(/_/g, "-");
-    const version = match[3]!.trim();
+    const versionSpec = match[3]?.trim() ?? "";
 
-    refs.push({ name, version, resolved: "", integrity: null });
+    // Extract the first exact version from the spec string
+    const exactMatch = /(?:^|,)==([^,!\s]+)/.exec(versionSpec);
+    const version = exactMatch ? exactMatch[1]! : versionSpec.replace(/^[=!<>~]+/, "") || "unknown";
+
+    refs.push({ name, version, resolved: "", integrity });
   }
   return refs;
+}
+
+// ── Project-wide requirements file discovery ──────────────────────────────────
+
+// Directories to skip during recursive search
+const SKIP_DIRS = new Set([
+  "node_modules", ".git", ".hg", ".svn",
+  ".venv", "venv", "env", ".env",
+  "__pycache__", ".tox", ".nox",
+  "dist", "build", ".eggs", "*.egg-info",
+  ".mypy_cache", ".pytest_cache", ".ruff_cache",
+]);
+
+/**
+ * Recursively finds all requirements*.txt files anywhere under `dir`.
+ * Returns absolute paths sorted so root-level files come first.
+ */
+async function findRequirementsFiles(dir: string): Promise<string[]> {
+  const found: string[] = [];
+
+  async function walk(current: string, depth: number, insideReqDir: boolean): Promise<void> {
+    if (depth > 8) return; // guard against deep or circular trees
+    let entries: import("node:fs").Dirent[];
+    try {
+      entries = await readdir(current, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        if (SKIP_DIRS.has(entry.name) || entry.name.endsWith(".egg-info")) continue;
+        // Any directory named "requirements" marks its contents as req files
+        const isReqDir = entry.name.toLowerCase() === "requirements";
+        await walk(join(current, entry.name), depth + 1, insideReqDir || isReqDir);
+      } else if (entry.isFile() && entry.name.endsWith(".txt")) {
+        // Include if: named requirements*.txt anywhere, OR any .txt inside a requirements/ dir
+        if (insideReqDir || /^requirements/i.test(entry.name)) {
+          found.push(join(current, entry.name));
+        }
+      }
+    }
+  }
+
+  await walk(dir, 0, false);
+
+  // Sort: root-level files first, then by path depth, then alphabetically
+  found.sort((a, b) => {
+    const aDepth = a.split("/").length;
+    const bDepth = b.split("/").length;
+    return aDepth !== bDepth ? aDepth - bDepth : a.localeCompare(b);
+  });
+
+  return found;
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -209,7 +296,10 @@ function parseRequirementsTxt(raw: string): PackageRef[] {
  * Detects and parses pip lockfiles in the given directory.
  * Returns null if no pip lockfile is found.
  *
- * Preference: uv.lock (modern, has hashes) > poetry.lock (has hashes) > requirements.txt
+ * Preference: uv.lock (modern, has hashes) > poetry.lock (has hashes) > requirements*.txt
+ *
+ * For requirements files: discovers all requirements*.txt files anywhere in the
+ * project tree and combines their packages (deduplicating by name@version).
  */
 export async function parsePipLockfile(dir: string): Promise<ParseResult | null> {
   // 1. uv.lock (preferred — modern, has hashes)
@@ -234,54 +324,39 @@ export async function parsePipLockfile(dir: string): Promise<ParseResult | null>
     // not found
   }
 
-  // 3. requirements.txt variants (no hashes — fallback)
-  // Check root requirements.txt first, then discover all *.txt in requirements/ directory.
-  for (const filename of await requirementsFiles(dir)) {
+  // 3. All requirements*.txt files anywhere in the project tree
+  const files = await findRequirementsFiles(dir);
+  if (files.length === 0) return null;
+
+  const seen = new Map<string, PackageRef>(); // key: "name@version"
+  for (const file of files) {
     try {
-      const raw = await readFile(join(dir, filename), "utf-8");
-      const refs = parseRequirementsTxt(raw);
-      if (refs.length > 0) {
-        return { refs, lockfileDir: dir };
+      const raw = await readFile(file, "utf-8");
+      for (const ref of parseRequirementsTxt(raw)) {
+        const key = `${ref.name}@${ref.version}`;
+        if (!seen.has(key)) seen.set(key, ref);
       }
     } catch {
-      // not found
+      // unreadable — skip
     }
   }
 
-  return null;
-}
-
-/**
- * Returns candidate requirements.txt paths to check, in preference order.
- * Discovers all *.txt files in a requirements/ subdirectory rather than
- * using a fixed allowlist of environment names.
- */
-async function requirementsFiles(dir: string): Promise<string[]> {
-  const candidates: string[] = ["requirements.txt"];
-  try {
-    const entries = await readdir(join(dir, "requirements"));
-    for (const entry of entries.sort()) {
-      if (entry.endsWith(".txt")) {
-        candidates.push(`requirements/${entry}`);
-      }
-    }
-  } catch {
-    // no requirements/ directory
-  }
-  return candidates;
+  if (seen.size === 0) return null;
+  return { refs: Array.from(seen.values()), lockfileDir: dir };
 }
 
 /**
  * Returns true if the directory contains a pip lockfile.
  */
 export async function hasPipLockfile(dir: string): Promise<boolean> {
-  for (const filename of ["uv.lock", "poetry.lock", ...await requirementsFiles(dir)]) {
+  for (const candidate of ["uv.lock", "poetry.lock"]) {
     try {
-      await readFile(join(dir, filename), "utf-8");
+      await readFile(join(dir, candidate), "utf-8");
       return true;
     } catch {
       // not found
     }
   }
-  return false;
+  const files = await findRequirementsFiles(dir);
+  return files.length > 0;
 }
