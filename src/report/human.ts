@@ -25,41 +25,34 @@ function severityColor(sev: Severity): string {
   }
 }
 
-function renderFinding(finding: Finding): string {
-  const lines: string[] = [];
+function findingLines(finding: Finding): string[] {
   const confSuffix = finding.confidence !== "high"
-    ? c(DIM, `/${finding.confidence}-confidence`)
+    ? c(DIM, ` (${finding.confidence} confidence)`)
     : "";
-  const sevLabel = c(severityColor(finding.severity), `[${finding.category}/${finding.severity}${confSuffix}]`);
-  lines.push(`  ${sevLabel} in ${c(CYAN, finding.source)}`);
-  lines.push(`  Pattern: ${c(BOLD, finding.pattern)}`);
-
-  const boxWidth = 62;
-  const border = "─".repeat(boxWidth);
-  lines.push(`  ┌─ ${c(BOLD + RED, "UNTRUSTED PACKAGE CONTENT")} ${"─".repeat(boxWidth - 27)}┐`);
-  for (const line of finding.excerpt.lines.split("\n")) {
-    const padded = line.padEnd(boxWidth);
-    lines.push(`  │ ${padded} │`);
+  const sevLabel = c(severityColor(finding.severity), finding.severity);
+  const out = [
+    `${c(BOLD, finding.category)}  ${sevLabel}${confSuffix}`,
+    `${c(DIM, finding.source)}  ${finding.pattern}`,
+  ];
+  for (const line of finding.excerpt.lines.split("\n").filter(l => l.trim())) {
+    out.push(c(DIM, line));
   }
-  lines.push(`  └${border}┘`);
-
-  return lines.join("\n");
+  return out;
 }
 
-function renderAdvisory(advisory: AdvisoryMatch): string {
-  const lines: string[] = [];
+function advisoryLines(advisory: AdvisoryMatch): string[] {
   const sevLabel = c(severityColor(advisory.severity), `[advisory/${advisory.severity}]`);
   const cveList = advisory.cves.length > 0 ? `  ${c(DIM, advisory.cves.join(", "))}` : "";
   const cvss = advisory.cvssScore !== null ? c(DIM, ` CVSS ${advisory.cvssScore.toFixed(1)}`) : "";
-  lines.push(`  ${sevLabel} ${c(BOLD, advisory.title)}${cvss}`);
-  lines.push(`  Vulnerable: ${c(DIM, advisory.vulnerableVersions)}${cveList}`);
-  if (advisory.patchedVersions) {
-    lines.push(`  ${c(GREEN, `Fix: upgrade to ${advisory.patchedVersions}`)}`);
-  } else {
-    lines.push(`  ${c(YELLOW, "Fix: no patched version available")}`);
-  }
-  lines.push(`  ${c(CYAN, advisory.url)}`);
-  return lines.join("\n");
+  const fix = advisory.patchedVersions
+    ? c(GREEN, `fix: upgrade to ${advisory.patchedVersions}`)
+    : c(YELLOW, "fix: no patched version available");
+  return [
+    `${sevLabel} ${c(BOLD, advisory.title)}${cvss}`,
+    `vulnerable: ${c(DIM, advisory.vulnerableVersions)}${cveList}`,
+    fix,
+    c(CYAN, advisory.url),
+  ];
 }
 
 function riskColor(risk: import("../types.js").RiskLevel): string {
@@ -73,124 +66,94 @@ function riskColor(risk: import("../types.js").RiskLevel): string {
   }
 }
 
+// Render a labeled section. First content line follows the label; subsequent
+// lines are indented to the same column.
+function section(label: string, items: string[]): string {
+  if (items.length === 0) return "";
+  const col = 11; // "  " + label padded to 9
+  const pad = " ".repeat(col);
+  const labelStr = `  ${label.padEnd(col - 2)}`;
+  return labelStr + items.join("\n" + pad);
+}
+
 function renderPackage(pkg: PackageReport): string {
   const lines: string[] = [];
-  const riskBadge = c(riskColor(pkg.risk), `[risk:${pkg.risk}]`);
-
-  const srcBadge = pkg.source.type !== "registry"
-    ? c(YELLOW, `[${pkg.source.type.toUpperCase()}]`) + " "
-    : "";
-
-  const pmBadge = pkg.packageManager === "pip"
-    ? c(DIM, "[pip]") + " "
-    : pkg.packageManager === "cargo"
-    ? c(DIM, "[cargo]") + " "
-    : pkg.packageManager === "gem"
-    ? c(DIM, "[gem]") + " "
-    : pkg.packageManager === "actions"
-    ? c(DIM, "[actions]") + " "
-    : pkg.packageManager === "gitmodules"
-    ? c(DIM, "[gitmodules]") + " "
-    : "";
-
-  const integrityBadge = pkg.source.integrity && !pkg.source.integrityVerified
-    ? c(RED + BOLD, "[INTEGRITY MISMATCH]") + " "
-    : "";
-
   const provenance = pkg.provenance;
-  const newScript = provenance.installScriptIsNew
-    ? c(RED + BOLD, "[NEW INSTALL SCRIPT]") + " "
-    : "";
-  const maintainers = provenance.maintainerCount !== null
-    ? c(DIM, `[${provenance.maintainerCount} maintainer${provenance.maintainerCount === 1 ? "" : "s"}]`) + " "
-    : "";
-  const downloads = provenance.weeklyDownloads !== null
-    ? c(DIM, `[${provenance.weeklyDownloads.toLocaleString()} dl/wk]`) + " "
-    : "";
-  const noProvenance = provenance.unavailableReason
-    ? c(DIM, `[no provenance: ${provenance.unavailableReason}]`) + " "
-    : "";
 
-  const attestationBadge = (() => {
-    if (!provenance.attestation) {
-      return provenance.unavailableReason ? "" : c(DIM, "[no provenance attestation]") + " ";
-    }
-    const { sigstoreVerified, signingIdentity, sourceRepo } = provenance.attestation;
-    const label = signingIdentity ?? sourceRepo ?? "attested";
-    if (sigstoreVerified === true) {
-      return c(GREEN, `[chain-verified: ${label}]`) + " ";
-    }
-    if (sigstoreVerified === false) {
-      return c(RED + BOLD, `[ATTESTATION INVALID: ${label}]`) + " ";
-    }
-    // null = parsed but not cryptographically verified
-    return c(GREEN, `[provenance: ${label}]`) + " ";
-  })();
+  // ── Header: name + risk + critical alerts ──────────────────────────────────
+  const riskBadge = c(riskColor(pkg.risk), `[risk:${pkg.risk}]`);
+  const alerts: string[] = [];
+  if (pkg.source.integrity && !pkg.source.integrityVerified)
+    alerts.push(c(RED + BOLD, "[INTEGRITY MISMATCH]"));
+  if (provenance.installScriptIsNew)
+    alerts.push(c(RED + BOLD, "[NEW INSTALL SCRIPT]"));
+  if (provenance.deprecated)
+    alerts.push(c(RED + BOLD, `[DEPRECATED: ${provenance.deprecated}]`));
+  const alertStr = alerts.length > 0 ? "  " + alerts.join("  ") : "";
+  lines.push(`\n${c(BOLD, `${pkg.name}@${pkg.version}`)}  ${riskBadge}${alertStr}`);
 
-  const deprecatedBadge = provenance.deprecated
-    ? c(RED + BOLD, `[DEPRECATED: ${provenance.deprecated}]`) + " "
-    : "";
-
-  const sigBadge =
-    provenance.hasRegistrySignature === false
-      ? c(YELLOW, "[unsigned]") + " "
-      : provenance.hasRegistrySignature === true
-      ? c(DIM, "[signed]") + " "
-      : "";
-
-  const publisherBadge =
-    provenance.publisher && provenance.publisherInMaintainers === false
-      ? c(YELLOW, `[publisher not in maintainers: ${provenance.publisher}]`) + " "
-      : provenance.publisher
-      ? c(DIM, `[publisher: ${provenance.publisher}]`) + " "
-      : "";
-
-  const newPublisherBadge =
-    provenance.publisherIsNewToPackage === true
-      ? c(YELLOW, "[new publisher for this package]") + " "
-      : "";
-
-  const velocityBadge = (() => {
-    const { firstPublishedAt, publishedAt, totalVersions } = provenance;
-    if (!firstPublishedAt || !publishedAt || (totalVersions ?? 0) < 5) return "";
-    const ageDays =
-      (new Date(publishedAt).getTime() - new Date(firstPublishedAt).getTime()) /
-      (1000 * 60 * 60 * 24);
-    const velocity = (totalVersions ?? 1) / Math.max(1, ageDays);
-    if (velocity > 10) return c(YELLOW, `[${(velocity).toFixed(0)} versions/day]`) + " ";
-    if (velocity > 3) return c(DIM, `[${(velocity).toFixed(1)} versions/day]`) + " ";
-    return "";
-  })();
-
-  lines.push(
-    `\n${c(BOLD, `${pkg.name}@${pkg.version}`)}  ${riskBadge}  ` +
-    pmBadge + srcBadge + integrityBadge + deprecatedBadge + newScript +
-    maintainers + downloads + sigBadge + publisherBadge + newPublisherBadge +
-    velocityBadge + noProvenance + attestationBadge
-  );
-
-  for (const [hook, script] of Object.entries(pkg.lifecycleScripts)) {
-    lines.push(`  ${c(CYAN, hook)}: ${c(DIM, JSON.stringify(script))}`);
+  // ── Signals: registry + provenance metadata ────────────────────────────────
+  const signals: string[] = [];
+  if (pkg.packageManager !== "npm")
+    signals.push(c(DIM, `[${pkg.packageManager}]`));
+  if (pkg.source.type !== "registry")
+    signals.push(c(YELLOW, `[${pkg.source.type.toUpperCase()}]`));
+  if (provenance.maintainerCount !== null)
+    signals.push(c(DIM, `[${provenance.maintainerCount} maintainer${provenance.maintainerCount === 1 ? "" : "s"}]`));
+  if (provenance.weeklyDownloads !== null)
+    signals.push(c(DIM, `[${provenance.weeklyDownloads.toLocaleString()} dl/wk]`));
+  const { firstPublishedAt, publishedAt, totalVersions } = provenance;
+  if (firstPublishedAt && publishedAt && (totalVersions ?? 0) >= 5) {
+    const ageDays = (new Date(publishedAt).getTime() - new Date(firstPublishedAt).getTime()) / (1000 * 60 * 60 * 24);
+    const vel = (totalVersions ?? 1) / Math.max(1, ageDays);
+    if (vel > 10) signals.push(c(YELLOW, `[${vel.toFixed(0)} versions/day]`));
+    else if (vel > 3) signals.push(c(DIM, `[${vel.toFixed(1)} versions/day]`));
   }
+  if (provenance.hasRegistrySignature === false)
+    signals.push(c(YELLOW, "[unsigned]"));
+  else if (provenance.hasRegistrySignature === true)
+    signals.push(c(DIM, "[signed]"));
+  if (provenance.publisher && provenance.publisherInMaintainers === false)
+    signals.push(c(YELLOW, `[publisher not in maintainers: ${provenance.publisher}]`));
+  else if (provenance.publisher)
+    signals.push(c(DIM, `[publisher: ${provenance.publisher}]`));
+  if (provenance.publisherIsNewToPackage === true)
+    signals.push(c(YELLOW, "[new publisher for this package]"));
+  if (provenance.unavailableReason) {
+    signals.push(c(DIM, `[no provenance: ${provenance.unavailableReason}]`));
+  } else if (provenance.attestation) {
+    const { sigstoreVerified, signingIdentity, sourceRepo } = provenance.attestation;
+    const label = (signingIdentity ?? sourceRepo ?? "attested").replace(/^https?:\/\//, "");
+    if (sigstoreVerified === true)       signals.push(c(GREEN, `[chain-verified: ${label}]`));
+    else if (sigstoreVerified === false) signals.push(c(RED + BOLD, `[ATTESTATION INVALID: ${label}]`));
+    else                                 signals.push(c(GREEN, `[provenance: ${label}]`));
+  } else {
+    signals.push(c(DIM, "[no provenance attestation]"));
+  }
+  const signalsLine = section("signals", [signals.join("  ")]);
+  if (signalsLine) lines.push(signalsLine);
 
+  // ── Scripts: lifecycle hooks ───────────────────────────────────────────────
+  const scriptItems = Object.entries(pkg.lifecycleScripts).map(
+    ([hook, script]) => `${c(CYAN, hook)}: ${c(DIM, JSON.stringify(script))}`
+  );
+  const scriptsSection = section("scripts", scriptItems);
+  if (scriptsSection) lines.push(scriptsSection);
+
+  // ── Findings: pattern findings + advisories + binary download ──────────────
+  const findingItems: string[] = [];
   if (pkg.binaryDownload) {
     const host = pkg.binaryDownload.host ?? "unknown host";
-    lines.push(
-      `  ${c(YELLOW, "[binary download]")} host: ${c(BOLD, host)}` +
-      (pkg.binaryDownload.remote_path ? ` path: ${c(DIM, pkg.binaryDownload.remote_path)}` : "")
-    );
+    const path = pkg.binaryDownload.remote_path ? `  path: ${c(DIM, pkg.binaryDownload.remote_path)}` : "";
+    findingItems.push(`binary download  host: ${c(BOLD, host)}${path}`);
   }
+  for (const advisory of pkg.advisories) findingItems.push(...advisoryLines(advisory));
+  for (const finding of pkg.findings)    findingItems.push(...findingLines(finding));
 
-  for (const advisory of pkg.advisories) {
-    lines.push(renderAdvisory(advisory));
-  }
-
-  if (pkg.findings.length === 0 && pkg.advisories.length === 0) {
-    lines.push(c(GREEN, "  ✓ No findings"));
+  if (findingItems.length > 0) {
+    lines.push(section("findings", findingItems));
   } else {
-    for (const finding of pkg.findings) {
-      lines.push(renderFinding(finding));
-    }
+    lines.push(c(GREEN, "  no findings"));
   }
 
   return lines.join("\n");
