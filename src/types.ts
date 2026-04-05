@@ -123,7 +123,7 @@ export interface BinaryField {
 }
 
 export interface AdvisoryMatch {
-  id: number;
+  id: string;
   title: string;
   severity: Severity;
   url: string;

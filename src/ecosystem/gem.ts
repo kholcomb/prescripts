@@ -44,6 +44,7 @@ import type {
 import type { DiskCache } from "../cache/disk-cache.js";
 import type { EcosystemPlugin, ExtractionResult } from "./types.js";
 import { hasGemfileLock, parseGemfileLock } from "../lockfile/gemfile-parser.js";
+import { fetchOsvAdvisories } from "../registry/osv-client.js";
 import {
   fetchGemsMeta,
   fetchGemBytes,
@@ -261,11 +262,10 @@ export class GemPlugin implements EcosystemPlugin {
   }
 
   async fetchAdvisories(
-    _refs: PackageRef[],
+    refs: PackageRef[],
     _opts: ScanOptions
   ): Promise<Map<string, AdvisoryMatch[]>> {
-    // Ruby advisory feed (bundler-audit / OSV) is a future enhancement
-    return new Map();
+    return fetchOsvAdvisories(refs, "RubyGems");
   }
 }
 

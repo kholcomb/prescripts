@@ -121,7 +121,7 @@ describe("toSarif", () => {
     const pkg = makePackage({
       advisories: [
         {
-          id: 1523,
+          id: "1523",
           title: "Prototype Pollution",
           severity: "high",
           url: "https://npmjs.com/advisories/1523",
@@ -137,7 +137,7 @@ describe("toSarif", () => {
     expect(result.ruleId).toBe("advisory_match");
     expect(result.level).toBe("error");
     expect(result.message.text).toContain("CVE-2020-8203");
-    expect(result.properties.advisory_id).toBe(1523);
+    expect(result.properties.advisory_id).toBe("1523");
   });
 
   it("sets artifact URI based on source type", () => {

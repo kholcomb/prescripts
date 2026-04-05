@@ -33,6 +33,7 @@ import type {
 import type { DiskCache } from "../cache/disk-cache.js";
 import type { EcosystemPlugin, ExtractionResult } from "./types.js";
 import { hasCargoLockfile, parseCargoLockfile } from "../lockfile/cargo-parser.js";
+import { fetchOsvAdvisories } from "../registry/osv-client.js";
 import {
   fetchCratesMeta,
   fetchCrateBytes,
@@ -261,11 +262,10 @@ export class CargoPlugin implements EcosystemPlugin {
   }
 
   async fetchAdvisories(
-    _refs: PackageRef[],
+    refs: PackageRef[],
     _opts: ScanOptions
   ): Promise<Map<string, AdvisoryMatch[]>> {
-    // RustSec advisory feed integration is a future enhancement
-    return new Map();
+    return fetchOsvAdvisories(refs, "crates.io");
   }
 }
 

@@ -20,6 +20,7 @@ import { parsePipLockfile, hasPipLockfile } from "../lockfile/pip-parser.js";
 import { extractPythonPackage } from "../extractor/python-tarball.js";
 import { fetchPyPIMeta, resolvePyPILatestVersion } from "../registry/pypi-client.js";
 import { extractPythonHooks, hasPythonHooks } from "../analyzer/python-hooks.js";
+import { fetchOsvAdvisories } from "../registry/osv-client.js";
 
 export class PipPlugin implements EcosystemPlugin {
   readonly packageManager = "pip" as const;
@@ -202,11 +203,10 @@ export class PipPlugin implements EcosystemPlugin {
   }
 
   async fetchAdvisories(
-    _refs: PackageRef[],
+    refs: PackageRef[],
     _opts: ScanOptions
   ): Promise<Map<string, AdvisoryMatch[]>> {
-    // PyPI advisory integration (OSV.dev) is a future enhancement
-    return new Map();
+    return fetchOsvAdvisories(refs, "PyPI");
   }
 }
 

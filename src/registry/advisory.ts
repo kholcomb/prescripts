@@ -123,7 +123,7 @@ export async function fetchAdvisories(
         if (matching.length === 0) continue;
 
         const mapped = matching.map((a) => ({
-          id: a.id,
+          id: String(a.id),
           title: a.title,
           severity: mapSeverity(a.severity),
           url: a.url,

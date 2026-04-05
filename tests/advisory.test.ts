@@ -83,7 +83,7 @@ describe("fetchAdvisories — version matching", () => {
 
     const advisory = result.get("mypkg@0.21.5")?.[0];
     expect(advisory).toBeDefined();
-    expect(advisory!.id).toBe(1102341);
+    expect(advisory!.id).toBe("1102341");
     expect(advisory!.severity).toBe("medium"); // "moderate" mapped to "medium"
     expect(advisory!.vulnerableVersions).toBe("<=0.24.2");
     expect(advisory!.patchedVersions).toBe(">=0.24.3");
