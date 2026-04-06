@@ -488,7 +488,7 @@ on:
 
 permissions:
   contents: read
-  security-events: write   # required for SARIF upload
+  security-events: write   # required for SARIF upload${withDiff ? "\n  pull-requests: write  # required for PR comment" : ""}
 
 jobs:
   scan:
