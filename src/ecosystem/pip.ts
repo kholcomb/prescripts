@@ -230,6 +230,8 @@ export class PipPlugin implements EcosystemPlugin {
       attestationRegressed,
       firstPublishedAt: meta.firstUploadTime,
       publisherIsNewToPackage: null,
+      binaryHostChanged: null,         // PyPI packages don't use node-pre-gyp binary.host
+      previousBinaryHost: null,
     };
 
     return {
@@ -309,6 +311,8 @@ function emptyProvenance(reason: string): ProvenanceInfo {
     attestationRegressed: null,
     firstPublishedAt: null,
     publisherIsNewToPackage: null,
+    binaryHostChanged: null,
+    previousBinaryHost: null,
   };
 }
 

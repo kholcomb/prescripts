@@ -87,6 +87,8 @@ function renderPackage(pkg: PackageReport): string {
     alerts.push(c(RED + BOLD, "[INTEGRITY MISMATCH]"));
   if (provenance?.installScriptIsNew)
     alerts.push(c(RED + BOLD, "[NEW INSTALL SCRIPT]"));
+  if (provenance?.binaryHostChanged)
+    alerts.push(c(RED + BOLD, "[BINARY HOST CHANGED]"));
   if (provenance?.deprecated)
     alerts.push(c(RED + BOLD, `[DEPRECATED: ${provenance.deprecated}]`));
   const alertStr = alerts.length > 0 ? "  " + alerts.join("  ") : "";

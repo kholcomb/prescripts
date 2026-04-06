@@ -74,6 +74,8 @@ export async function fetchProvenance(
       attestationRegressed: null,
       firstPublishedAt: null,
       publisherIsNewToPackage: null,
+      binaryHostChanged: null,
+      previousBinaryHost: null,
     },
     registryManifestScripts: null,
     registryIntegrity: null,
@@ -103,13 +105,27 @@ export async function fetchProvenance(
     let installScriptIsNew: boolean | null = null;
     const currentHasScript = hasInstallScript(versionEntry?.scripts);
 
+    const currentBinaryHost = versionEntry?.binary?.host ?? null;
+    let binaryHostChanged: boolean | null = null;
+    let previousBinaryHost: string | null = null;
+
     if (versionIndex > 0) {
       const prevVersion = versionList[versionIndex - 1];
       const prevPkg = prevVersion ? meta.versions[prevVersion] : undefined;
       const prevHasScript = hasInstallScript(prevPkg?.scripts);
       installScriptIsNew = currentHasScript && !prevHasScript;
+
+      previousBinaryHost = prevPkg?.binary?.host ?? null;
+      // Only flag when at least one version has a binary host — otherwise it's
+      // just two packages with no binary download field (normal, not a change).
+      if (currentBinaryHost !== null || previousBinaryHost !== null) {
+        binaryHostChanged = currentBinaryHost !== previousBinaryHost;
+      } else {
+        binaryHostChanged = false;
+      }
     } else if (versionIndex === 0) {
       installScriptIsNew = currentHasScript;
+      // First version — no previous to compare against, leave binaryHostChanged null
     }
 
     // --- Sigstore attestation (current version) ---
@@ -194,6 +210,8 @@ export async function fetchProvenance(
       attestationRegressed,
       firstPublishedAt,
       publisherIsNewToPackage,
+      binaryHostChanged,
+      previousBinaryHost,
     };
 
     return { provenance, registryManifestScripts, registryIntegrity, registrySignatures };

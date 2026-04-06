@@ -74,6 +74,11 @@ export interface ProvenanceInfo {
   /** True if this publisher has never published this package before.
    *  Fingerprints account takeover even when the attacker is a current maintainer. */
   publisherIsNewToPackage: boolean | null;
+  /** True if the binary download host (node-pre-gyp `binary.host`) changed from
+   *  the previous version. A host change mid-stream is a strong supply-chain signal. */
+  binaryHostChanged: boolean | null;
+  /** The binary download host of the previous version, for use in finding excerpts. */
+  previousBinaryHost: string | null;
 }
 
 /** Returned by fetchProvenance — includes registry manifest scripts for

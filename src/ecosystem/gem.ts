@@ -220,6 +220,8 @@ export class GemPlugin implements EcosystemPlugin {
       attestationRegressed: null,
       firstPublishedAt: meta.firstUploadTime,
       publisherIsNewToPackage: null,  // no per-version published_by in RubyGems API
+      binaryHostChanged: null,        // RubyGems does not use node-pre-gyp binary.host
+      previousBinaryHost: null,
     };
 
     return {
@@ -395,6 +397,8 @@ function emptyProvenance(reason: string): ProvenanceInfo {
     attestationRegressed: null,
     firstPublishedAt: null,
     publisherIsNewToPackage: null,
+    binaryHostChanged: null,
+    previousBinaryHost: null,
   };
 }
 

@@ -283,6 +283,24 @@ export class NpmPlugin implements EcosystemPlugin {
       }
     }
 
+    // Binary host change — download host differs from previous version
+    if (provenance.binaryHostChanged === true) {
+      findings.push({
+        scriptHook: null,
+        source: "binary download host",
+        category: "binary_host_changed",
+        severity: "high",
+        confidence: "medium",
+        pattern: "binary download host changed from previous version",
+        excerpt: {
+          _warning: "UNTRUSTED THIRD-PARTY CONTENT",
+          lines:
+            `previous: ${provenance.previousBinaryHost ?? "(none)"}\n` +
+            `current:  ${result.binaryDownload?.host ?? "(none)"}`,
+        },
+      });
+    }
+
     // Provenance regression — attestation absent when previous version had one
     if (provenance.attestationRegressed === true) {
       findings.push({

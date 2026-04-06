@@ -17,5 +17,7 @@ export function emptyProvenance(): ProvenanceInfo {
     attestationRegressed: null,
     firstPublishedAt: null,
     publisherIsNewToPackage: null,
+    binaryHostChanged: null,
+    previousBinaryHost: null,
   };
 }

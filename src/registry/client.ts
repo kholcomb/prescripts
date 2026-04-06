@@ -112,6 +112,7 @@ export interface FullPackageMeta {
     string,
     {
       scripts?: Record<string, string>;
+      binary?: { host?: string };
       deprecated?: string;
       _npmUser?: { name: string; email?: string };
       dist?: {

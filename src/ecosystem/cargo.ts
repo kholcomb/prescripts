@@ -233,6 +233,8 @@ export class CargoPlugin implements EcosystemPlugin {
       attestationRegressed: null,
       firstPublishedAt: meta.firstUploadTime,
       publisherIsNewToPackage,
+      binaryHostChanged: null,        // Cargo packages don't use node-pre-gyp binary.host
+      previousBinaryHost: null,
     };
 
     return {
@@ -362,6 +364,8 @@ function emptyProvenance(reason: string): ProvenanceInfo {
     attestationRegressed: null,
     firstPublishedAt: null,
     publisherIsNewToPackage: null,
+    binaryHostChanged: null,
+    previousBinaryHost: null,
   };
 }
 
