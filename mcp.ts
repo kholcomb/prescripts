@@ -5,7 +5,7 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { runScan, runCheck, scanSinglePackage } from "./src/cli.js";
-import { MCP_TOOL_DESCRIPTIONS } from "./src/report/mcp-tools.js";
+import { MCP_TOOL_DESCRIPTIONS, mcpReplacer } from "./src/report/mcp-tools.js";
 import { compareReports } from "./src/analyzer/compare.js";
 import type { ScanOptions } from "./src/types.js";
 
@@ -145,8 +145,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       process.stdout.write = origWrite;
     }
 
+    const raw = chunks.join("");
+    let text: string;
+    try {
+      text = JSON.stringify(JSON.parse(raw), mcpReplacer, 2);
+    } catch {
+      text = raw;
+    }
     return {
-      content: [{ type: "text", text: chunks.join("") }],
+      content: [{ type: "text", text }],
     };
   }
 
@@ -181,7 +188,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     const diff = compareReports(fromReport, toReport);
     return {
-      content: [{ type: "text", text: JSON.stringify(diff, null, 2) }],
+      content: [{ type: "text", text: JSON.stringify(diff, mcpReplacer, 2) }],
     };
   }
 
@@ -208,8 +215,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       process.stdout.write = origWrite;
     }
 
+    const raw = chunks.join("");
+    let text: string;
+    try {
+      text = JSON.stringify(JSON.parse(raw), mcpReplacer, 2);
+    } catch {
+      text = raw;
+    }
     return {
-      content: [{ type: "text", text: chunks.join("") }],
+      content: [{ type: "text", text }],
     };
   }
 
