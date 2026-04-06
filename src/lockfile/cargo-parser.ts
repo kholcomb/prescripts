@@ -28,17 +28,7 @@ export async function hasCargoLockfile(dir: string): Promise<boolean> {
   }
 }
 
-export async function parseCargoLockfile(
-  dir: string
-): Promise<{ refs: PackageRef[] } | null> {
-  const lockPath = join(dir, "Cargo.lock");
-  let raw: string;
-  try {
-    raw = await readFile(lockPath, "utf-8");
-  } catch {
-    return null;
-  }
-
+export function parseCargoLockfileContent(raw: string): PackageRef[] {
   const refs: PackageRef[] = [];
 
   // Split on [[package]] markers to get individual blocks
@@ -69,6 +59,21 @@ export async function parseCargoLockfile(
     });
   }
 
+  return refs;
+}
+
+export async function parseCargoLockfile(
+  dir: string
+): Promise<{ refs: PackageRef[] } | null> {
+  const lockPath = join(dir, "Cargo.lock");
+  let raw: string;
+  try {
+    raw = await readFile(lockPath, "utf-8");
+  } catch {
+    return null;
+  }
+
+  const refs = parseCargoLockfileContent(raw);
   return { refs };
 }
 

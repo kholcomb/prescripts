@@ -51,6 +51,21 @@ export interface EcosystemPlugin {
   detectLockfile(dir: string): Promise<boolean>;
 
   /**
+   * Returns the relative path(s) of lockfiles present in `dir`.
+   * Used by the diff command to fetch base-branch content from git.
+   * Returns an empty array if no lockfile is found.
+   */
+  getLockfilePaths(dir: string): Promise<string[]>;
+
+  /**
+   * Parses lockfile content from a string into PackageRefs.
+   * `filename` is the basename of the lockfile (e.g. "package-lock.json",
+   * "Cargo.lock") and is used by multi-format ecosystems (pip) to select
+   * the right sub-parser.
+   */
+  parseLockfileContent(content: string, filename: string): PackageRef[];
+
+  /**
    * Parses the lockfile found in `dir` and returns all PackageRefs to scan.
    * Returns null if no lockfile is found.
    */

@@ -38,7 +38,7 @@ export interface ParseResult {
  * Only registry packages are included. git/path/url sources are skipped
  * (no corresponding PyPI metadata to fetch).
  */
-function parseUvLock(raw: string): PackageRef[] {
+export function parseUvLock(raw: string): PackageRef[] {
   const refs: PackageRef[] = [];
   const blocks = raw.split(/\[\[package\]\]/);
 
@@ -84,7 +84,7 @@ function parseUvLock(raw: string): PackageRef[] {
  * We parse it with a simple line-oriented state machine rather than a full TOML
  * parser to avoid adding a dependency.
  */
-function parsePoetryLock(raw: string): PackageRef[] {
+export function parsePoetryLock(raw: string): PackageRef[] {
   const refs: PackageRef[] = [];
   const lines = raw.split("\n");
 
@@ -189,7 +189,7 @@ function joinContinuations(raw: string): string {
  *   https://..., git+https://...    skipped (no PyPI lookup)
  *   \ line continuations            joined before parsing
  */
-function parseRequirementsTxt(raw: string): PackageRef[] {
+export function parseRequirementsTxt(raw: string): PackageRef[] {
   const refs: PackageRef[] = [];
 
   for (const rawLine of joinContinuations(raw).split("\n")) {
@@ -288,6 +288,19 @@ async function findRequirementsFiles(dir: string): Promise<string[]> {
   });
 
   return found;
+}
+
+// ── Content-string parser (for git-fetched lockfiles) ────────────────────────
+
+/**
+ * Parses pip lockfile content from a string.
+ * `filename` is the basename of the lockfile (e.g. "uv.lock", "poetry.lock",
+ * "requirements.txt") and selects the right sub-parser.
+ */
+export function parsePipLockfileContent(raw: string, filename: string): PackageRef[] {
+  if (filename === "uv.lock") return parseUvLock(raw);
+  if (filename === "poetry.lock") return parsePoetryLock(raw);
+  return parseRequirementsTxt(raw);
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────

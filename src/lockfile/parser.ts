@@ -58,6 +58,33 @@ export interface ParseResult {
   lockfileDir: string;
 }
 
+export function parseLockfileContent(raw: string): PackageRef[] {
+  const lockfile = JSON.parse(raw) as Lockfile;
+  const seen = new Map<string, PackageRef>();
+
+  if (lockfile.lockfileVersion >= 2 && lockfile.packages) {
+    for (const [pkgPath, pkg] of Object.entries(lockfile.packages)) {
+      if (pkgPath === "") continue;
+      if (pkg.link === true) continue;
+
+      const name = nameFromPackagePath(pkgPath);
+      const key = `${name}@${pkg.version}`;
+      if (!seen.has(key)) {
+        seen.set(key, {
+          name,
+          version: pkg.version,
+          resolved: pkg.resolved ?? "",
+          integrity: pkg.integrity ?? null,
+        });
+      }
+    }
+  } else if (lockfile.dependencies) {
+    collectV1(lockfile.dependencies, seen);
+  }
+
+  return Array.from(seen.values());
+}
+
 export async function parseLockfile(dir: string): Promise<ParseResult> {
   // npm-shrinkwrap.json takes precedence over package-lock.json when both exist
   // (mirrors npm's own resolution order)
@@ -97,30 +124,5 @@ export async function parseLockfile(dir: string): Promise<ParseResult> {
     );
   }
 
-  const lockfile = JSON.parse(raw) as Lockfile;
-  const seen = new Map<string, PackageRef>();
-
-  if (lockfile.lockfileVersion >= 2 && lockfile.packages) {
-    // v2/v3: use `packages` object; skip the root entry (empty string key)
-    for (const [pkgPath, pkg] of Object.entries(lockfile.packages)) {
-      if (pkgPath === "") continue;
-      if (pkg.link === true) continue; // symlinks to workspace packages
-
-      const name = nameFromPackagePath(pkgPath);
-      const key = `${name}@${pkg.version}`;
-      if (!seen.has(key)) {
-        seen.set(key, {
-          name,
-          version: pkg.version,
-          resolved: pkg.resolved ?? "",
-          integrity: pkg.integrity ?? null,
-        });
-      }
-    }
-  } else if (lockfile.dependencies) {
-    // v1: recurse `dependencies` tree
-    collectV1(lockfile.dependencies, seen);
-  }
-
-  return { refs: Array.from(seen.values()), lockfileDir };
+  return { refs: parseLockfileContent(raw), lockfileDir };
 }

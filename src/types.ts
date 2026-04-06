@@ -161,7 +161,7 @@ export interface PackageReport {
   /** "pip" for Python packages from PyPI; absent/undefined for npm packages. */
   packageManager?: PackageManager;
   source: SourceInfo;
-  provenance: ProvenanceInfo;
+  provenance: ProvenanceInfo | null;
   lifecycleScripts: LifecycleScripts;
   binaryDownload: BinaryField | null;
   advisories: AdvisoryMatch[];

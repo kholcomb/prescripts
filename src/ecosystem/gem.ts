@@ -43,7 +43,7 @@ import type {
 } from "../types.js";
 import type { DiskCache } from "../cache/disk-cache.js";
 import type { EcosystemPlugin, ExtractionResult } from "./types.js";
-import { hasGemfileLock, parseGemfileLock } from "../lockfile/gemfile-parser.js";
+import { hasGemfileLock, parseGemfileLock, parseGemfileLockContent } from "../lockfile/gemfile-parser.js";
 import { fetchOsvAdvisories } from "../registry/osv-client.js";
 import {
   fetchGemsMeta,
@@ -64,6 +64,14 @@ export class GemPlugin implements EcosystemPlugin {
 
   async detectLockfile(dir: string): Promise<boolean> {
     return hasGemfileLock(dir);
+  }
+
+  async getLockfilePaths(dir: string): Promise<string[]> {
+    return (await hasGemfileLock(dir)) ? ["Gemfile.lock"] : [];
+  }
+
+  parseLockfileContent(content: string, _filename: string): PackageRef[] {
+    return parseGemfileLockContent(content);
   }
 
   async parseLockfile(dir: string): Promise<{ refs: PackageRef[]; lockfileDir: string } | null> {

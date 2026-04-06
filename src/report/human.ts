@@ -85,9 +85,9 @@ function renderPackage(pkg: PackageReport): string {
   const alerts: string[] = [];
   if (pkg.source.integrity && !pkg.source.integrityVerified)
     alerts.push(c(RED + BOLD, "[INTEGRITY MISMATCH]"));
-  if (provenance.installScriptIsNew)
+  if (provenance?.installScriptIsNew)
     alerts.push(c(RED + BOLD, "[NEW INSTALL SCRIPT]"));
-  if (provenance.deprecated)
+  if (provenance?.deprecated)
     alerts.push(c(RED + BOLD, `[DEPRECATED: ${provenance.deprecated}]`));
   const alertStr = alerts.length > 0 ? "  " + alerts.join("  ") : "";
   lines.push(`\n${c(BOLD, `${pkg.name}@${pkg.version}`)}  ${riskBadge}${alertStr}`);
@@ -98,35 +98,37 @@ function renderPackage(pkg: PackageReport): string {
     signals.push(c(DIM, `[${pkg.packageManager}]`));
   if (pkg.source.type !== "registry")
     signals.push(c(YELLOW, `[${pkg.source.type.toUpperCase()}]`));
-  if (provenance.maintainerCount !== null)
-    signals.push(c(DIM, `[${provenance.maintainerCount} maintainer${provenance.maintainerCount === 1 ? "" : "s"}]`));
-  const { firstPublishedAt, publishedAt, totalVersions } = provenance;
-  if (firstPublishedAt && publishedAt && (totalVersions ?? 0) >= 5) {
-    const ageDays = (new Date(publishedAt).getTime() - new Date(firstPublishedAt).getTime()) / (1000 * 60 * 60 * 24);
-    const vel = (totalVersions ?? 1) / Math.max(1, ageDays);
-    if (vel > 10) signals.push(c(YELLOW, `[${vel.toFixed(0)} versions/day]`));
-    else if (vel > 3) signals.push(c(DIM, `[${vel.toFixed(1)} versions/day]`));
-  }
-  if (provenance.hasRegistrySignature === false)
-    signals.push(c(YELLOW, "[unsigned]"));
-  else if (provenance.hasRegistrySignature === true)
-    signals.push(c(DIM, "[signed]"));
-  if (provenance.publisher && provenance.publisherInMaintainers === false)
-    signals.push(c(YELLOW, `[publisher not in maintainers: ${provenance.publisher}]`));
-  else if (provenance.publisher)
-    signals.push(c(DIM, `[publisher: ${provenance.publisher}]`));
-  if (provenance.publisherIsNewToPackage === true)
-    signals.push(c(YELLOW, "[new publisher for this package]"));
-  if (provenance.unavailableReason) {
-    signals.push(c(DIM, `[no provenance: ${provenance.unavailableReason}]`));
-  } else if (provenance.attestation) {
-    const { sigstoreVerified, signingIdentity, sourceRepo } = provenance.attestation;
-    const label = (signingIdentity ?? sourceRepo ?? "attested").replace(/^https?:\/\//, "");
-    if (sigstoreVerified === true)       signals.push(c(GREEN, `[chain-verified: ${label}]`));
-    else if (sigstoreVerified === false) signals.push(c(RED + BOLD, `[ATTESTATION INVALID: ${label}]`));
-    else                                 signals.push(c(GREEN, `[provenance: ${label}]`));
-  } else {
-    signals.push(c(DIM, "[no provenance attestation]"));
+  if (provenance) {
+    if (provenance.maintainerCount !== null)
+      signals.push(c(DIM, `[${provenance.maintainerCount} maintainer${provenance.maintainerCount === 1 ? "" : "s"}]`));
+    const { firstPublishedAt, publishedAt, totalVersions } = provenance;
+    if (firstPublishedAt && publishedAt && (totalVersions ?? 0) >= 5) {
+      const ageDays = (new Date(publishedAt).getTime() - new Date(firstPublishedAt).getTime()) / (1000 * 60 * 60 * 24);
+      const vel = (totalVersions ?? 1) / Math.max(1, ageDays);
+      if (vel > 10) signals.push(c(YELLOW, `[${vel.toFixed(0)} versions/day]`));
+      else if (vel > 3) signals.push(c(DIM, `[${vel.toFixed(1)} versions/day]`));
+    }
+    if (provenance.hasRegistrySignature === false)
+      signals.push(c(YELLOW, "[unsigned]"));
+    else if (provenance.hasRegistrySignature === true)
+      signals.push(c(DIM, "[signed]"));
+    if (provenance.publisher && provenance.publisherInMaintainers === false)
+      signals.push(c(YELLOW, `[publisher not in maintainers: ${provenance.publisher}]`));
+    else if (provenance.publisher)
+      signals.push(c(DIM, `[publisher: ${provenance.publisher}]`));
+    if (provenance.publisherIsNewToPackage === true)
+      signals.push(c(YELLOW, "[new publisher for this package]"));
+    if (provenance.unavailableReason) {
+      signals.push(c(DIM, `[no provenance: ${provenance.unavailableReason}]`));
+    } else if (provenance.attestation) {
+      const { sigstoreVerified, signingIdentity, sourceRepo } = provenance.attestation;
+      const label = (signingIdentity ?? sourceRepo ?? "attested").replace(/^https?:\/\//, "");
+      if (sigstoreVerified === true)       signals.push(c(GREEN, `[chain-verified: ${label}]`));
+      else if (sigstoreVerified === false) signals.push(c(RED + BOLD, `[ATTESTATION INVALID: ${label}]`));
+      else                                 signals.push(c(GREEN, `[provenance: ${label}]`));
+    } else {
+      signals.push(c(DIM, "[no provenance attestation]"));
+    }
   }
   const signalsLine = section("signals", [signals.join("  ")]);
   if (signalsLine) lines.push(signalsLine);

@@ -17,7 +17,7 @@ import type {
 } from "../types.js";
 import type { DiskCache } from "../cache/disk-cache.js";
 import type { EcosystemPlugin, ExtractionResult } from "./types.js";
-import { parseLockfile } from "../lockfile/parser.js";
+import { parseLockfile, parseLockfileContent } from "../lockfile/parser.js";
 import { readWorkspacePatterns } from "../lockfile/workspace.js";
 import { fetchAndExtract } from "../extractor/index.js";
 import { fetchProvenance } from "../registry/metadata.js";
@@ -50,6 +50,22 @@ export class NpmPlugin implements EcosystemPlugin {
       }
     }
     return false;
+  }
+
+  async getLockfilePaths(dir: string): Promise<string[]> {
+    for (const name of ["npm-shrinkwrap.json", "package-lock.json"]) {
+      try {
+        await access(join(dir, name));
+        return [name];
+      } catch {
+        // not found
+      }
+    }
+    return [];
+  }
+
+  parseLockfileContent(content: string, _filename: string): PackageRef[] {
+    return parseLockfileContent(content);
   }
 
   async parseLockfile(dir: string): Promise<{ refs: PackageRef[]; lockfileDir: string } | null> {

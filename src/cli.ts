@@ -5,6 +5,8 @@ import { DiskCache } from "./cache/disk-cache.js";
 import { buildProjectReport, toJson } from "./report/json-report.js";
 import { renderReport, renderProgress, clearProgress } from "./report/human.js";
 import { toSarif } from "./report/sarif.js";
+import { runDiffEngine } from "./diff.js";
+import { renderDiffMarkdown } from "./report/diff-markdown.js";
 import { parseLockfile } from "./lockfile/parser.js";
 import { detectEcosystems, scanAny, npmPlugin, getPluginByName } from "./ecosystem/index.js";
 import { runLocalScanners } from "./scanner/local.js";
@@ -322,12 +324,151 @@ async function writeOutput(
   }
 }
 
+// ── diff ─────────────────────────────────────────────────────────────────────
+
+export async function runDiff(
+  dir: string,
+  baseRef: string,
+  opts: ScanOptions
+): Promise<number> {
+  const projectDir = resolve(dir);
+  const fileConfig = await loadConfig(projectDir);
+  const mergedOpts: ScanOptions = {
+    ...opts,
+    trust: opts.trust ?? fileConfig.trust,
+    minRisk: opts.minRisk ?? fileConfig.minRisk,
+    pypiAttestations: opts.pypiAttestations ?? fileConfig.pypiAttestations,
+  };
+
+  const result = await runDiffEngine(projectDir, baseRef, mergedOpts);
+  const { comparisons } = result;
+
+  // ── Human output (stdout) ──────────────────────────────────────────────────
+  if (!mergedOpts.json && !mergedOpts.sarif) {
+    const newFindings = comparisons.flatMap((c) => c.newFindings).length;
+    const scriptChanges = comparisons.filter(
+      (c) => c.addedScripts.length + c.removedScripts.length + c.changedScripts.length > 0
+    ).length;
+    const binaryChanges = comparisons.filter((c) => c.binaryHostChanged).length;
+
+    process.stdout.write(
+      `\nDiff against ${baseRef} — ${comparisons.length} package${comparisons.length === 1 ? "" : "s"} changed\n\n`
+    );
+
+    if (comparisons.length === 0) {
+      process.stdout.write("  No version changes detected.\n");
+    }
+
+    for (const c of comparisons) {
+      const tag =
+        c.newFindings.length > 0
+          ? "\x1b[31m[findings]\x1b[0m"
+          : c.binaryHostChanged
+          ? "\x1b[33m[binary host changed]\x1b[0m"
+          : c.addedScripts.length + c.removedScripts.length + c.changedScripts.length > 0
+          ? "\x1b[36m[scripts changed]\x1b[0m"
+          : "\x1b[2m[clean]\x1b[0m";
+
+      process.stdout.write(`  ${tag} \x1b[1m${c.name}\x1b[0m  ${c.fromVersion} → ${c.toVersion}\n`);
+
+      for (const s of [...c.addedScripts, ...c.removedScripts, ...c.changedScripts]) {
+        const changeType = c.addedScripts.includes(s) ? "added" : c.removedScripts.includes(s) ? "removed" : "changed";
+        process.stdout.write(`    \x1b[2m${s.hook} ${changeType}\x1b[0m\n`);
+        if (s.before) process.stdout.write(`      before: \x1b[2m${s.before}\x1b[0m\n`);
+        if (s.after)  process.stdout.write(`       after: ${s.after}\n`);
+      }
+
+      for (const f of c.newFindings) {
+        process.stdout.write(`    \x1b[31m${f.severity}\x1b[0m  ${f.category}  ${f.pattern}\n`);
+      }
+
+      if (c.binaryHostChanged) {
+        process.stdout.write(`    binary host: \x1b[2m${c.fromBinaryHost ?? "none"}\x1b[0m → \x1b[33m${c.toBinaryHost ?? "none"}\x1b[0m\n`);
+      }
+    }
+
+    process.stdout.write(
+      `\n  Summary: ${newFindings} new finding${newFindings === 1 ? "" : "s"}, ` +
+      `${scriptChanges} script change${scriptChanges === 1 ? "" : "s"}, ` +
+      `${binaryChanges} binary host change${binaryChanges === 1 ? "" : "s"}\n\n`
+    );
+  }
+
+  // ── File outputs (--output-dir) ────────────────────────────────────────────
+  if (mergedOpts.outputDir) {
+    await mkdir(mergedOpts.outputDir, { recursive: true });
+
+    const md = renderDiffMarkdown(result);
+    await writeFile(join(mergedOpts.outputDir, "diff.md"), md, "utf-8");
+
+    // SARIF: synthesise a ProjectReport containing only new findings
+    const syntheticPackages = comparisons
+      .filter((c) => c.newFindings.length > 0)
+      .map((c) => ({
+        name: c.name,
+        version: c.toVersion,
+        packageManager: "npm" as const,
+        source: { type: "registry" as const, resolved: "", integrity: null, integrityVerified: false },
+        provenance: null,
+        lifecycleScripts: {},
+        binaryDownload: null,
+        advisories: [],
+        findings: c.newFindings,
+        risk: "high" as const,
+      }));
+
+    const syntheticProject = buildProjectReport(syntheticPackages, "scan", true, "low");
+    await writeFile(join(mergedOpts.outputDir, "diff.sarif"), toSarif(syntheticProject), "utf-8");
+
+    const jsonOut = JSON.stringify({ ...result, comparisons: result.comparisons }, null, 2);
+    await writeFile(join(mergedOpts.outputDir, "diff.json"), jsonOut, "utf-8");
+
+    process.stderr.write(`Diff reports written to ${mergedOpts.outputDir}/\n`);
+  }
+
+  if (mergedOpts.sarif) {
+    const syntheticPackages = comparisons
+      .filter((c) => c.newFindings.length > 0)
+      .map((c) => ({
+        name: c.name,
+        version: c.toVersion,
+        packageManager: "npm" as const,
+        source: { type: "registry" as const, resolved: "", integrity: null, integrityVerified: false },
+        provenance: null,
+        lifecycleScripts: {},
+        binaryDownload: null,
+        advisories: [],
+        findings: c.newFindings,
+        risk: "high" as const,
+      }));
+    const syntheticProject = buildProjectReport(syntheticPackages, "scan", true, "low");
+    process.stdout.write(toSarif(syntheticProject) + "\n");
+  } else if (mergedOpts.json) {
+    process.stdout.write(JSON.stringify(result, null, 2) + "\n");
+  }
+
+  const hasActionable = comparisons.some((c) => c.newFindings.length > 0);
+  return hasActionable ? 1 : 0;
+}
+
 // ── init-ci / init-hooks ──────────────────────────────────────────────────────
 
-function buildWorkflow(minRisk: string, noFail: boolean): string {
+function buildWorkflow(minRisk: string, noFail: boolean, withDiff: boolean): string {
   const scanLine = noFail
     ? `npm-prescripts scan --output-dir . --min-risk ${minRisk} || true`
     : `npm-prescripts scan --output-dir . --min-risk ${minRisk}`;
+
+  const diffSteps = withDiff ? `
+      - name: Diff changed packages
+        if: github.event_name == 'pull_request'
+        run: npm-prescripts diff --base origin/\${{ github.base_ref }} --output-dir .
+
+      - name: Post PR comment
+        if: github.event_name == 'pull_request'
+        run: gh pr comment \${{ github.event.pull_request.number }} --body-file diff.md --edit-last || gh pr comment \${{ github.event.pull_request.number }} --body-file diff.md
+        env:
+          GH_TOKEN: \${{ secrets.GITHUB_TOKEN }}
+` : "";
 
   return `# Generated by npm-prescripts init-ci
 # Scans the npm lockfile for malicious lifecycle scripts and known vulnerabilities.
@@ -373,14 +514,15 @@ jobs:
         if: always()   # upload even when the scan step fails
         with:
           sarif_file: results.sarif
-`;
+${diffSteps}`;
 }
 
 export async function runInitCi(
   dir: string,
   minRisk: string,
   noFail: boolean,
-  force: boolean
+  force: boolean,
+  withDiff: boolean = false
 ): Promise<number> {
   const projectDir = resolve(dir);
   const workflowDir = join(projectDir, ".github", "workflows");
@@ -408,7 +550,7 @@ export async function runInitCi(
   }
 
   await mkdir(workflowDir, { recursive: true });
-  await writeFile(workflowPath, buildWorkflow(minRisk, noFail), "utf-8");
+  await writeFile(workflowPath, buildWorkflow(minRisk, noFail, withDiff), "utf-8");
 
   process.stdout.write(
     `${cc(GREEN, "✓")} ${cc(BOLD, workflowPath)}\n\n` +
@@ -730,6 +872,30 @@ export function buildProgram(): Command {
       }
     );
 
+  sharedOptions(
+    program
+      .command("diff [dir]")
+      .description(
+        "Diff lockfile changes against a base git ref (default: origin/main).\n" +
+          "Reports version changes across all detected ecosystems, with install-script\n" +
+          "diffs and new findings for each changed package.\n" +
+          "Use --output-dir to write diff.md (PR comment), diff.sarif, and diff.json."
+      )
+      .option(
+        "--base <ref>",
+        "Base git ref to compare against",
+        "origin/main"
+      )
+  ).action(async (dir: string | undefined, opts: CliScanOptions & { base: string }) => {
+    try {
+      const code = await runDiff(dir ?? ".", opts.base, parseOpts(opts));
+      process.exit(code);
+    } catch (err) {
+      process.stderr.write(`Error: ${String(err)}\n`);
+      process.exit(2);
+    }
+  });
+
   program
     .command("init-ci [dir]")
     .description(
@@ -743,13 +909,18 @@ export function buildProgram(): Command {
     )
     .option("--no-fail", "Never fail the workflow — always upload SARIF but exit 0", false)
     .option("--force", "Overwrite existing workflow file", false)
+    .option(
+      "--with-diff",
+      "Add a diff step that compares changed packages on PRs and posts a comment",
+      false
+    )
     .action(
       async (
         dir: string | undefined,
-        opts: { minRisk: string; noFail: boolean; force: boolean }
+        opts: { minRisk: string; noFail: boolean; force: boolean; withDiff: boolean }
       ) => {
         try {
-          const code = await runInitCi(dir ?? ".", opts.minRisk, opts.noFail, opts.force);
+          const code = await runInitCi(dir ?? ".", opts.minRisk, opts.noFail, opts.force, opts.withDiff);
           process.exit(code);
         } catch (err) {
           process.stderr.write(`Error: ${String(err)}\n`);

@@ -32,7 +32,7 @@ import type {
 } from "../types.js";
 import type { DiskCache } from "../cache/disk-cache.js";
 import type { EcosystemPlugin, ExtractionResult } from "./types.js";
-import { hasCargoLockfile, parseCargoLockfile } from "../lockfile/cargo-parser.js";
+import { hasCargoLockfile, parseCargoLockfile, parseCargoLockfileContent } from "../lockfile/cargo-parser.js";
 import { fetchOsvAdvisories } from "../registry/osv-client.js";
 import {
   fetchCratesMeta,
@@ -53,6 +53,14 @@ export class CargoPlugin implements EcosystemPlugin {
 
   async detectLockfile(dir: string): Promise<boolean> {
     return hasCargoLockfile(dir);
+  }
+
+  async getLockfilePaths(dir: string): Promise<string[]> {
+    return (await hasCargoLockfile(dir)) ? ["Cargo.lock"] : [];
+  }
+
+  parseLockfileContent(content: string, _filename: string): PackageRef[] {
+    return parseCargoLockfileContent(content);
   }
 
   async parseLockfile(dir: string): Promise<{ refs: PackageRef[]; lockfileDir: string } | null> {

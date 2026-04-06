@@ -40,17 +40,7 @@ export async function hasGemfileLock(dir: string): Promise<boolean> {
   }
 }
 
-export async function parseGemfileLock(
-  dir: string
-): Promise<{ refs: PackageRef[] } | null> {
-  const lockPath = join(dir, "Gemfile.lock");
-  let raw: string;
-  try {
-    raw = await readFile(lockPath, "utf-8");
-  } catch {
-    return null;
-  }
-
+export function parseGemfileLockContent(raw: string): PackageRef[] {
   const refs: PackageRef[] = [];
   const seen = new Set<string>(); // deduplicate name@version
 
@@ -91,5 +81,20 @@ export async function parseGemfileLock(
     }
   }
 
+  return refs;
+}
+
+export async function parseGemfileLock(
+  dir: string
+): Promise<{ refs: PackageRef[] } | null> {
+  const lockPath = join(dir, "Gemfile.lock");
+  let raw: string;
+  try {
+    raw = await readFile(lockPath, "utf-8");
+  } catch {
+    return null;
+  }
+
+  const refs = parseGemfileLockContent(raw);
   return refs.length > 0 ? { refs } : null;
 }

@@ -16,9 +16,9 @@ const RISK_ORDER: Record<RiskLevel, number> = {
 export function isActionable(pkg: PackageReport): boolean {
   if (pkg.findings.length > 0) return true;
   if (pkg.source.integrity && !pkg.source.integrityVerified) return true;
-  if (pkg.provenance.installScriptIsNew === true) return true;
-  if (pkg.provenance.publisherInMaintainers === false) return true;
-  if (pkg.provenance.attestationRegressed === true) return true;
+  if (pkg.provenance?.installScriptIsNew === true) return true;
+  if (pkg.provenance?.publisherInMaintainers === false) return true;
+  if (pkg.provenance?.attestationRegressed === true) return true;
   if (pkg.advisories.some((a) => a.patchedVersions !== null)) return true;
   return false;
 }

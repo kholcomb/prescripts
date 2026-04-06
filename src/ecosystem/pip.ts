@@ -16,7 +16,7 @@ import type {
 } from "../types.js";
 import type { DiskCache } from "../cache/disk-cache.js";
 import type { EcosystemPlugin, ExtractionResult } from "./types.js";
-import { parsePipLockfile, hasPipLockfile } from "../lockfile/pip-parser.js";
+import { parsePipLockfile, hasPipLockfile, parsePipLockfileContent } from "../lockfile/pip-parser.js";
 import { extractPythonPackage } from "../extractor/python-tarball.js";
 import { fetchPyPIMeta, fetchPyPIProvenance, resolvePyPILatestVersion } from "../registry/pypi-client.js";
 import { parsePyPIAttestation } from "../registry/pypi-attestation.js";
@@ -73,6 +73,27 @@ export class PipPlugin implements EcosystemPlugin {
 
   async detectLockfile(dir: string): Promise<boolean> {
     return hasPipLockfile(dir);
+  }
+
+  async getLockfilePaths(dir: string): Promise<string[]> {
+    const { access, readdir } = await import("node:fs/promises");
+    const { join } = await import("node:path");
+    for (const name of ["uv.lock", "poetry.lock"]) {
+      try {
+        await access(join(dir, name));
+        return [name];
+      } catch {
+        // not found
+      }
+    }
+    // Fall back to requirements*.txt files
+    const entries = await readdir(dir).catch(() => [] as string[]);
+    const reqs = entries.filter((f) => /^requirements.*\.txt$/i.test(f)).sort();
+    return reqs;
+  }
+
+  parseLockfileContent(content: string, filename: string): PackageRef[] {
+    return parsePipLockfileContent(content, filename);
   }
 
   async parseLockfile(dir: string): Promise<{ refs: PackageRef[]; lockfileDir: string } | null> {
