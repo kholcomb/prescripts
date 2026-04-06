@@ -78,7 +78,7 @@ async function runEcosystemRefs(
 
 // ── Primary scan / check entrypoints ─────────────────────────────────────────
 
-export async function runScan(dir: string, opts: ScanOptions): Promise<number> {
+export async function runScan(dir: string, opts: ScanOptions, pm?: string): Promise<number> {
   const projectDir = resolve(dir);
 
   const fileConfig = await loadConfig(projectDir);
@@ -89,7 +89,8 @@ export async function runScan(dir: string, opts: ScanOptions): Promise<number> {
     pypiAttestations: opts.pypiAttestations ?? fileConfig.pypiAttestations,
   };
 
-  const plugins = await detectEcosystems(projectDir);
+  let plugins = await detectEcosystems(projectDir);
+  if (pm) plugins = plugins.filter((p) => p.packageManager === pm);
   if (plugins.length === 0) {
     process.stderr.write(
       "No supported lockfile found.\n" +
@@ -191,18 +192,18 @@ export async function runCheck(
 export async function scanSinglePackage(
   name: string,
   version: string,
-  opts: ScanOptions
+  opts: ScanOptions,
+  pm?: string
 ): Promise<PackageReport | null> {
-  npmPlugin.init(opts);
+  const plugin = (pm ? getPluginByName(pm) : null) ?? npmPlugin;
+  plugin.init(opts);
   const cache = new DiskCache(opts.cacheDir);
-  const ref: PackageRef = { name, version, resolved: "", integrity: null };
-  // Resolve the tarball URL and integrity from the registry
-  const { fetchVersionMeta } = await import("./registry/client.js");
-  const meta = await fetchVersionMeta(name, version);
-  ref.resolved = meta.tarballUrl;
-  ref.integrity = meta.integrity;
-  const advisoryMap = await npmPlugin.fetchAdvisories([ref], opts);
-  return scanAny(ref, npmPlugin, opts, cache, process.cwd(), advisoryMap);
+  const spec = `${name}@${version}`;
+  const refs = await plugin.resolveCheckSpec(spec, opts);
+  if (!refs || refs.length === 0) return null;
+  const ref = refs[0]!;
+  const advisoryMap = await plugin.fetchAdvisories([ref], opts);
+  return scanAny(ref, plugin, opts, cache, process.cwd(), advisoryMap);
 }
 
 // ── npm-only commands (fix, init-ci, init-hooks) ──────────────────────────────

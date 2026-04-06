@@ -44,11 +44,16 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         properties: {
           name: {
             type: "string",
-            description: "Package name (e.g. 'express' or '@scope/pkg')",
+            description: "Package name (e.g. 'express', 'requests', 'serde')",
           },
           version: {
             type: "string",
             description: "Package version or range (default: latest)",
+          },
+          pm: {
+            type: "string",
+            enum: ["npm", "pip", "cargo", "gem"],
+            description: "Package manager / ecosystem (default: npm)",
           },
           severity: {
             type: "string",
@@ -81,6 +86,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: "string",
             description: "Version to compare to (e.g. the upgrade candidate)",
           },
+          pm: {
+            type: "string",
+            enum: ["npm", "pip", "cargo", "gem"],
+            description: "Package manager / ecosystem (default: npm)",
+          },
           severity: {
             type: "string",
             enum: ["low", "medium", "high", "critical"],
@@ -98,7 +108,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         properties: {
           path: {
             type: "string",
-            description: "Absolute path to project directory containing package-lock.json",
+            description: "Absolute path to project directory (auto-detects lockfile)",
+          },
+          pm: {
+            type: "string",
+            enum: ["npm", "pip", "cargo", "gem"],
+            description: "Restrict scan to one ecosystem (default: auto-detect all)",
           },
           severity: {
             type: "string",
@@ -123,6 +138,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   if (name === "scan_package") {
     const pkgName = String(typedArgs["name"] ?? "");
     const version = typedArgs["version"] ? String(typedArgs["version"]) : "latest";
+    const pm = typedArgs["pm"] ? String(typedArgs["pm"]) : undefined;
     const packageSpec = `${pkgName}@${version}`;
 
     const opts: ScanOptions = {
@@ -140,7 +156,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     };
 
     try {
-      await runCheck(packageSpec, opts);
+      await runCheck(packageSpec, opts, pm);
     } finally {
       process.stdout.write = origWrite;
     }
@@ -161,14 +177,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const pkgName = String(typedArgs["name"] ?? "");
     const fromVersion = String(typedArgs["fromVersion"] ?? "");
     const toVersion = String(typedArgs["toVersion"] ?? "");
+    const pm = typedArgs["pm"] ? String(typedArgs["pm"]) : undefined;
     const opts: ScanOptions = {
       ...DEFAULT_OPTS,
       severity: (typedArgs["severity"] as ScanOptions["severity"]) ?? "medium",
     };
 
     const [fromReport, toReport] = await Promise.all([
-      scanSinglePackage(pkgName, fromVersion, opts),
-      scanSinglePackage(pkgName, toVersion, opts),
+      scanSinglePackage(pkgName, fromVersion, opts, pm),
+      scanSinglePackage(pkgName, toVersion, opts, pm),
     ]);
 
     if (!fromReport || !toReport) {
@@ -194,6 +211,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
   if (name === "scan_project") {
     const path = String(typedArgs["path"] ?? ".");
+    const pm = typedArgs["pm"] ? String(typedArgs["pm"]) : undefined;
     const opts: ScanOptions = {
       ...DEFAULT_OPTS,
       severity: (typedArgs["severity"] as ScanOptions["severity"]) ?? "medium",
@@ -210,7 +228,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     };
 
     try {
-      await runScan(path, opts);
+      await runScan(path, opts, pm);
     } finally {
       process.stdout.write = origWrite;
     }
