@@ -552,12 +552,17 @@ export async function runInitCi(
   await mkdir(workflowDir, { recursive: true });
   await writeFile(workflowPath, buildWorkflow(minRisk, noFail, withDiff), "utf-8");
 
+  const diffLine = withDiff
+    ? `  Posts PR comment with per-package install-script diff\n`
+    : "";
+
   process.stdout.write(
     `${cc(GREEN, "✓")} ${cc(BOLD, workflowPath)}\n\n` +
       `  Triggers on: pull_request, push to main\n` +
       `  Fails workflow when risk ≥ ${cc(BOLD, minRisk)}\n` +
-      `  Uploads SARIF to GitHub Security tab\n\n` +
-      `  ${cc(DIM, "Commit and push to activate:")}\n` +
+      `  Uploads SARIF to GitHub Security tab\n` +
+      diffLine +
+      `\n  ${cc(DIM, "Commit and push to activate:")}\n` +
       `  git add ${workflowPath}\n` +
       `  git commit -m "Add npm-prescripts CI workflow"\n`
   );
