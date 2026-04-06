@@ -252,7 +252,7 @@ const SKIP_DIRS = new Set([
  * Recursively finds all requirements*.txt files anywhere under `dir`.
  * Returns absolute paths sorted so root-level files come first.
  */
-async function findRequirementsFiles(dir: string): Promise<string[]> {
+export async function findRequirementsFiles(dir: string): Promise<string[]> {
   const found: string[] = [];
 
   async function walk(current: string, depth: number, insideReqDir: boolean): Promise<void> {

@@ -341,23 +341,24 @@ export async function runDiff(
   };
 
   const result = await runDiffEngine(projectDir, baseRef, mergedOpts);
-  const { comparisons } = result;
+  const { comparisons, added } = result;
 
   // ── Human output (stdout) ──────────────────────────────────────────────────
   if (!mergedOpts.json && !mergedOpts.sarif) {
-    const newFindings = comparisons.flatMap((c) => c.newFindings).length;
+    const newFindings = comparisons.flatMap((c) => c.newFindings).length + added.flatMap((p) => p.findings).length;
     const scriptChanges = comparisons.filter(
       (c) => c.addedScripts.length + c.removedScripts.length + c.changedScripts.length > 0
     ).length;
     const binaryChanges = comparisons.filter((c) => c.binaryHostChanged).length;
 
-    process.stdout.write(
-      `\nDiff against ${baseRef} — ${comparisons.length} package${comparisons.length === 1 ? "" : "s"} changed\n\n`
-    );
+    const summaryParts = [
+      comparisons.length > 0 ? `${comparisons.length} changed` : "",
+      added.length > 0 ? `${added.length} added` : "",
+    ].filter(Boolean).join(", ");
 
-    if (comparisons.length === 0) {
-      process.stdout.write("  No version changes detected.\n");
-    }
+    process.stdout.write(
+      `\nDiff against ${baseRef} — ${summaryParts || "no changes"}\n\n`
+    );
 
     for (const c of comparisons) {
       const tag =
@@ -387,6 +388,22 @@ export async function runDiff(
       }
     }
 
+    if (added.length > 0) {
+      process.stdout.write(`\n  Added packages:\n`);
+      for (const pkg of added) {
+        const tag =
+          pkg.findings.length > 0
+            ? "\x1b[31m[findings]\x1b[0m"
+            : Object.keys(pkg.lifecycleScripts).length > 0
+            ? "\x1b[36m[has scripts]\x1b[0m"
+            : "\x1b[2m[clean]\x1b[0m";
+        process.stdout.write(`  ${tag} \x1b[1m${pkg.name}@${pkg.version}\x1b[0m\n`);
+        for (const f of pkg.findings) {
+          process.stdout.write(`    \x1b[31m${f.severity}\x1b[0m  ${f.category}  ${f.pattern}\n`);
+        }
+      }
+    }
+
     process.stdout.write(
       `\n  Summary: ${newFindings} new finding${newFindings === 1 ? "" : "s"}, ` +
       `${scriptChanges} script change${scriptChanges === 1 ? "" : "s"}, ` +
@@ -401,21 +418,24 @@ export async function runDiff(
     const md = renderDiffMarkdown(result);
     await writeFile(join(mergedOpts.outputDir, "diff.md"), md, "utf-8");
 
-    // SARIF: synthesise a ProjectReport containing only new findings
-    const syntheticPackages = comparisons
-      .filter((c) => c.newFindings.length > 0)
-      .map((c) => ({
-        name: c.name,
-        version: c.toVersion,
-        packageManager: "npm" as const,
-        source: { type: "registry" as const, resolved: "", integrity: null, integrityVerified: false },
-        provenance: null,
-        lifecycleScripts: {},
-        binaryDownload: null,
-        advisories: [],
-        findings: c.newFindings,
-        risk: "high" as const,
-      }));
+    // SARIF: synthesise a ProjectReport from new findings (upgrades) + added packages
+    const syntheticPackages = [
+      ...comparisons
+        .filter((c) => c.newFindings.length > 0)
+        .map((c) => ({
+          name: c.name,
+          version: c.toVersion,
+          packageManager: "npm" as const,
+          source: { type: "registry" as const, resolved: "", integrity: null, integrityVerified: false },
+          provenance: null,
+          lifecycleScripts: {},
+          binaryDownload: null,
+          advisories: [],
+          findings: c.newFindings,
+          risk: "high" as const,
+        })),
+      ...added.filter((p) => p.findings.length > 0),
+    ];
 
     const syntheticProject = buildProjectReport(syntheticPackages, "scan", true, "low");
     await writeFile(join(mergedOpts.outputDir, "diff.sarif"), toSarif(syntheticProject), "utf-8");
@@ -427,27 +447,32 @@ export async function runDiff(
   }
 
   if (mergedOpts.sarif) {
-    const syntheticPackages = comparisons
-      .filter((c) => c.newFindings.length > 0)
-      .map((c) => ({
-        name: c.name,
-        version: c.toVersion,
-        packageManager: "npm" as const,
-        source: { type: "registry" as const, resolved: "", integrity: null, integrityVerified: false },
-        provenance: null,
-        lifecycleScripts: {},
-        binaryDownload: null,
-        advisories: [],
-        findings: c.newFindings,
-        risk: "high" as const,
-      }));
+    const syntheticPackages = [
+      ...comparisons
+        .filter((c) => c.newFindings.length > 0)
+        .map((c) => ({
+          name: c.name,
+          version: c.toVersion,
+          packageManager: "npm" as const,
+          source: { type: "registry" as const, resolved: "", integrity: null, integrityVerified: false },
+          provenance: null,
+          lifecycleScripts: {},
+          binaryDownload: null,
+          advisories: [],
+          findings: c.newFindings,
+          risk: "high" as const,
+        })),
+      ...added.filter((p) => p.findings.length > 0),
+    ];
     const syntheticProject = buildProjectReport(syntheticPackages, "scan", true, "low");
     process.stdout.write(toSarif(syntheticProject) + "\n");
   } else if (mergedOpts.json) {
     process.stdout.write(JSON.stringify(result, null, 2) + "\n");
   }
 
-  const hasActionable = comparisons.some((c) => c.newFindings.length > 0);
+  const hasActionable =
+    comparisons.some((c) => c.newFindings.length > 0) ||
+    added.some((p) => p.findings.length > 0);
   return hasActionable ? 1 : 0;
 }
 

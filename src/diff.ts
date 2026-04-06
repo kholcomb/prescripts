@@ -55,34 +55,40 @@ interface VersionDelta {
 function findDeltas(
   before: Map<string, string>,
   after: Map<string, string>
-): VersionDelta[] {
+): { deltas: VersionDelta[]; additions: string[] } {
   const deltas: VersionDelta[] = [];
+  const additions: string[] = [];
   for (const [name, toVersion] of after) {
     const fromVersion = before.get(name);
-    if (fromVersion && fromVersion !== toVersion) {
+    if (!fromVersion) {
+      additions.push(name);
+    } else if (fromVersion !== toVersion) {
       deltas.push({ name, fromVersion, toVersion });
     }
-    // Note: newly added packages (fromVersion undefined) are not compared —
-    // there is no "before" report to diff against. The scan command covers them.
   }
-  return deltas;
+  return { deltas, additions };
 }
 
 // ── Per-ecosystem diff ────────────────────────────────────────────────────────
+
+interface EcosystemDiffResult {
+  comparisons: CompareResult[];
+  added: PackageReport[];
+}
 
 async function diffEcosystem(
   plugin: EcosystemPlugin,
   projectDir: string,
   baseRef: string,
   opts: ScanOptions
-): Promise<CompareResult[]> {
+): Promise<EcosystemDiffResult> {
   // 1. Get lockfile paths present in the current working tree
   const lockfilePaths = await plugin.getLockfilePaths(projectDir);
-  if (lockfilePaths.length === 0) return [];
+  if (lockfilePaths.length === 0) return { comparisons: [], added: [] };
 
   // 2. Parse current (after) state from disk
   const afterParsed = await plugin.parseLockfile(projectDir);
-  if (!afterParsed) return [];
+  if (!afterParsed) return { comparisons: [], added: [] };
   const afterMap = refsToVersionMap(afterParsed.refs);
 
   // 3. Parse base (before) state from git for each lockfile
@@ -93,20 +99,18 @@ async function diffEcosystem(
     const refs = plugin.parseLockfileContent(content, basename(relPath));
     beforeRefs.push(...refs);
   }
-  if (beforeRefs.length === 0) return [];
+
+  // If no base lockfile exists at all (new project / first PR), treat everything as added
   const beforeMap = refsToVersionMap(beforeRefs);
+  const { deltas, additions } = findDeltas(beforeMap, afterMap);
 
-  // 4. Find version deltas
-  const deltas = findDeltas(beforeMap, afterMap);
-  if (deltas.length === 0) return [];
-
-  // 5. Scan both versions for each delta and compare
   const cache = new DiskCache(opts.cacheDir);
-  const results: CompareResult[] = [];
+  const comparisons: CompareResult[] = [];
+  const added: PackageReport[] = [];
 
-  await Promise.all(
-    deltas.map(async ({ name, fromVersion, toVersion }) => {
-      // Resolve full PackageRefs from the parsed lockfile data
+  await Promise.all([
+    // 4. Scan both versions for each delta and compare
+    ...deltas.map(async ({ name, fromVersion, toVersion }) => {
       const fromRef = beforeRefs.find(
         (r) => r.name === name && r.version === fromVersion
       ) ?? { name, version: fromVersion, resolved: "", integrity: null };
@@ -120,16 +124,23 @@ async function diffEcosystem(
         scanAny(toRef, plugin, opts, cache, projectDir).catch(() => null),
       ]);
 
-      // If either version has no install-time behaviour at all, synthesise a
-      // minimal report so compareReports can still produce a meaningful diff.
       const from: PackageReport = fromReport ?? emptyReport(fromRef, plugin.packageManager);
       const to: PackageReport = toReport ?? emptyReport(toRef, plugin.packageManager);
+      comparisons.push(compareReports(from, to));
+    }),
 
-      results.push(compareReports(from, to));
-    })
-  );
+    // 5. Scan newly added packages
+    ...additions.map(async (name) => {
+      const ref = afterParsed.refs.find((r) => r.name === name);
+      if (!ref) return;
+      const report = await scanAny(ref, plugin, opts, cache, projectDir).catch(() => null);
+      // Include even if scan returned null — emit a minimal report so the
+      // addition is always visible in the diff output.
+      added.push(report ?? emptyReport(ref, plugin.packageManager));
+    }),
+  ]);
 
-  return results;
+  return { comparisons, added };
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -138,11 +149,13 @@ export interface DiffResult {
   baseRef: string;
   ecosystems: string[];
   comparisons: CompareResult[];
+  /** Packages that appear in the current lockfile but not the base — new additions. */
+  added: PackageReport[];
 }
 
 /**
  * Diffs all lockfiles in `projectDir` against `baseRef`.
- * Returns CompareResults for every package whose version changed.
+ * Returns CompareResults for version changes and PackageReports for additions.
  */
 export async function runDiffEngine(
   projectDir: string,
@@ -151,19 +164,18 @@ export async function runDiffEngine(
 ): Promise<DiffResult> {
   const plugins = await detectEcosystems(projectDir);
 
-  const allComparisons = (
-    await Promise.all(
-      plugins.map((plugin) => {
-        plugin.init(opts);
-        return diffEcosystem(plugin, projectDir, baseRef, opts);
-      })
-    )
-  ).flat();
+  const ecosystemResults = await Promise.all(
+    plugins.map((plugin) => {
+      plugin.init(opts);
+      return diffEcosystem(plugin, projectDir, baseRef, opts);
+    })
+  );
 
   return {
     baseRef,
     ecosystems: plugins.map((p) => p.packageManager),
-    comparisons: allComparisons,
+    comparisons: ecosystemResults.flatMap((r) => r.comparisons),
+    added: ecosystemResults.flatMap((r) => r.added),
   };
 }
 

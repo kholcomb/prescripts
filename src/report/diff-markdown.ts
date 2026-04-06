@@ -7,7 +7,7 @@
 
 import type { DiffResult } from "../diff.js";
 import type { CompareResult } from "../analyzer/compare.js";
-import type { Finding } from "../types.js";
+import type { Finding, PackageReport } from "../types.js";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -171,61 +171,159 @@ function packageDetail(c: CompareResult): string {
   return sections.join("\n\n");
 }
 
+// ── Added packages section ────────────────────────────────────────────────────
+
+function addedPackageRow(pkg: PackageReport): string {
+  const findingsCell =
+    pkg.findings.length > 0
+      ? pkg.findings.map((f) => severityBadge(f.severity)).join(", ")
+      : "—";
+  const scriptCell =
+    Object.keys(pkg.lifecycleScripts).length > 0
+      ? Object.keys(pkg.lifecycleScripts).map((h) => `\`${h}\``).join(", ")
+      : "—";
+  return `| \`${pkg.name}@${pkg.version}\` | ${scriptCell} | ${findingsCell} |`;
+}
+
+function addedPackageDetail(pkg: PackageReport): string | null {
+  if (pkg.findings.length === 0 && Object.keys(pkg.lifecycleScripts).length === 0) return null;
+
+  const sections: string[] = [`### \`${pkg.name}@${pkg.version}\` _(new)_`];
+
+  const scripts = Object.entries(pkg.lifecycleScripts);
+  if (scripts.length > 0) {
+    sections.push(
+      "**Install scripts:**\n" +
+      scripts.map(([hook, val]) =>
+        `<details><summary>${hook}</summary>\n\n\`\`\`sh\n${val}\n\`\`\`\n</details>`
+      ).join("\n")
+    );
+  }
+
+  if (pkg.findings.length > 0) {
+    sections.push(
+      "**Findings:**\n" +
+      pkg.findings.map((f) => findingBlock(f)).join("\n")
+    );
+  }
+
+  return sections.join("\n\n");
+}
+
+function renderAddedSection(added: PackageReport[]): string[] {
+  if (added.length === 0) return [];
+
+  const flagged = added.filter(
+    (p) => p.findings.length > 0 || Object.keys(p.lifecycleScripts).length > 0
+  );
+  const clean = added.filter(
+    (p) => p.findings.length === 0 && Object.keys(p.lifecycleScripts).length === 0
+  );
+
+  const lines: string[] = [
+    "",
+    "---",
+    "",
+    `### ➕ Added packages (${added.length})`,
+    "",
+  ];
+
+  if (flagged.length > 0) {
+    lines.push(
+      "| Package | Install scripts | Findings |",
+      "|---------|-----------------|----------|",
+      ...flagged.map(addedPackageRow)
+    );
+
+    const details = flagged.map(addedPackageDetail).filter((d): d is string => d !== null);
+    if (details.length > 0) {
+      lines.push("", ...details.flatMap((d) => [d, ""]));
+    }
+  }
+
+  if (clean.length > 0) {
+    const cleanList = clean.map((p) => `\`${p.name}@${p.version}\``).join(", ");
+    lines.push(
+      `<details><summary>+ ${clean.length} clean addition${clean.length === 1 ? "" : "s"} (no install scripts or findings)</summary>\n\n${cleanList}\n\n</details>`
+    );
+  }
+
+  return lines;
+}
+
 // ── Public API ────────────────────────────────────────────────────────────────
 
 export function renderDiffMarkdown(result: DiffResult): string {
-  const { comparisons, baseRef } = result;
+  const { comparisons, added, baseRef } = result;
 
-  if (comparisons.length === 0) {
-    return `## ✅ npm-prescripts: no package version changes detected\n\n_Compared against \`${baseRef}\`._\n`;
+  if (comparisons.length === 0 && added.length === 0) {
+    return `## ✅ npm-prescripts: no package changes detected\n\n_Compared against \`${baseRef}\`._\n`;
   }
 
   const interesting = comparisons.filter(isInteresting);
   const clean = comparisons.filter((c) => !isInteresting(c));
   const cleanGroups = groupClean(clean);
 
-  const hasNewFindings = interesting.some((c) => c.newFindings.length > 0);
-  const hasBinaryHostChange = interesting.some((c) => c.binaryHostChanged);
-  const hasScriptChanges = interesting.some(
-    (c) => c.addedScripts.length + c.removedScripts.length + c.changedScripts.length > 0
+  const addedFlagged = added.filter(
+    (p) => p.findings.length > 0 || Object.keys(p.lifecycleScripts).length > 0
   );
+
+  const hasNewFindings = interesting.some((c) => c.newFindings.length > 0) || addedFlagged.some((p) => p.findings.length > 0);
+  const hasBinaryHostChange = interesting.some((c) => c.binaryHostChanged);
+  const hasScriptChanges =
+    interesting.some((c) => c.addedScripts.length + c.removedScripts.length + c.changedScripts.length > 0) ||
+    addedFlagged.some((p) => Object.keys(p.lifecycleScripts).length > 0);
+
+  const totalChanged = comparisons.length;
+  const totalAdded = added.length;
+  const summaryParts = [
+    totalChanged > 0 ? `${totalChanged} changed` : "",
+    totalAdded > 0 ? `${totalAdded} added` : "",
+  ].filter(Boolean).join(", ");
 
   const headline =
     hasNewFindings
-      ? `## ⚠️ npm-prescripts: ${comparisons.length} package${comparisons.length === 1 ? "" : "s"} changed — new findings`
+      ? `## ⚠️ npm-prescripts: ${summaryParts} — new findings`
       : hasBinaryHostChange
-      ? `## ⚠️ npm-prescripts: ${comparisons.length} package${comparisons.length === 1 ? "" : "s"} changed — binary host changed`
+      ? `## ⚠️ npm-prescripts: ${summaryParts} — binary host changed`
       : hasScriptChanges
-      ? `## 🔍 npm-prescripts: ${comparisons.length} package${comparisons.length === 1 ? "" : "s"} changed — install scripts modified`
-      : `## ✅ npm-prescripts: ${comparisons.length} package${comparisons.length === 1 ? "" : "s"} changed — no install-time changes`;
+      ? `## 🔍 npm-prescripts: ${summaryParts} — install scripts present`
+      : `## ✅ npm-prescripts: ${summaryParts} — no install-time concerns`;
 
   const lines: string[] = [
     headline,
     "",
     `_Compared against \`${baseRef}\`. Ecosystems: ${result.ecosystems.join(", ")}._`,
-    "",
-    "| Package | Version change | Install scripts | New findings | Binary host |",
-    "|---------|---------------|-----------------|--------------|-------------|",
-    ...interesting.map(interestingRow),
   ];
 
-  // Clean packages: grouped rows inside a collapsed <details> block
-  if (cleanGroups.length > 0) {
-    const cleanRowLines = cleanGroups.map(cleanGroupRow).join("\n");
+  // Version-change table (only if there are comparisons)
+  if (comparisons.length > 0) {
     lines.push(
-      `| <details><summary>+ ${clean.length} clean package${clean.length === 1 ? "" : "s"}</summary><table><tr><th>Package</th><th>Version change</th></tr>${
-        cleanGroups.map((g) => `<tr><td><code>${g.label}</code></td><td>${g.fromVersion} → ${g.toVersion}</td></tr>`).join("")
-      }</table></details> | | | | |`
+      "",
+      "| Package | Version change | Install scripts | New findings | Binary host |",
+      "|---------|---------------|-----------------|--------------|-------------|",
+      ...interesting.map(interestingRow)
     );
+
+    if (cleanGroups.length > 0) {
+      lines.push(
+        `| <details><summary>+ ${clean.length} clean package${clean.length === 1 ? "" : "s"}</summary><table><tr><th>Package</th><th>Version change</th></tr>${
+          cleanGroups.map((g) => `<tr><td><code>${g.label}</code></td><td>${g.fromVersion} → ${g.toVersion}</td></tr>`).join("")
+        }</table></details> | | | | |`
+      );
+    }
   }
 
-  // Detail blocks for interesting packages only
+  // Detail blocks for interesting version changes
   if (interesting.length > 0) {
     lines.push("", "---", "");
     for (const c of interesting) {
       lines.push(packageDetail(c), "");
     }
   }
+
+  // Added packages section
+  lines.push(...renderAddedSection(added));
 
   return lines.join("\n");
 }

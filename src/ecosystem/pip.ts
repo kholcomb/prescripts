@@ -16,7 +16,7 @@ import type {
 } from "../types.js";
 import type { DiskCache } from "../cache/disk-cache.js";
 import type { EcosystemPlugin, ExtractionResult } from "./types.js";
-import { parsePipLockfile, hasPipLockfile, parsePipLockfileContent } from "../lockfile/pip-parser.js";
+import { parsePipLockfile, hasPipLockfile, parsePipLockfileContent, findRequirementsFiles } from "../lockfile/pip-parser.js";
 import { extractPythonPackage } from "../extractor/python-tarball.js";
 import { fetchPyPIMeta, fetchPyPIProvenance, resolvePyPILatestVersion } from "../registry/pypi-client.js";
 import { parsePyPIAttestation } from "../registry/pypi-attestation.js";
@@ -76,8 +76,8 @@ export class PipPlugin implements EcosystemPlugin {
   }
 
   async getLockfilePaths(dir: string): Promise<string[]> {
-    const { access, readdir } = await import("node:fs/promises");
-    const { join } = await import("node:path");
+    const { access } = await import("node:fs/promises");
+    const { join, relative } = await import("node:path");
     for (const name of ["uv.lock", "poetry.lock"]) {
       try {
         await access(join(dir, name));
@@ -86,10 +86,9 @@ export class PipPlugin implements EcosystemPlugin {
         // not found
       }
     }
-    // Fall back to requirements*.txt files
-    const entries = await readdir(dir).catch(() => [] as string[]);
-    const reqs = entries.filter((f) => /^requirements.*\.txt$/i.test(f)).sort();
-    return reqs;
+    // Recursively discover requirements*.txt files and return paths relative to dir
+    const absPaths = await findRequirementsFiles(dir);
+    return absPaths.map((p) => relative(dir, p));
   }
 
   parseLockfileContent(content: string, filename: string): PackageRef[] {
