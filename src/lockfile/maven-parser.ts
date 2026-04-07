@@ -26,6 +26,12 @@
  * This does not handle dynamic versions ($guavaVersion), variable substitution,
  * or BOM imports — those refs are silently skipped.
  *
+ * ── gradle/libs.versions.toml ────────────────────────────────────────────────
+ * Gradle version catalog. Centralizes dependency versions outside build scripts.
+ * [versions] block defines named version strings; [libraries] block declares
+ * group:artifact coordinates and references those version aliases via version.ref.
+ * Inline version = "..." is also supported. [bundles] and [plugins] are ignored.
+ *
  * ── Multi-module support ──────────────────────────────────────────────────────
  * Maven aggregator pom.xml declares sub-modules via <modules><module>path</module>...
  * Gradle multi-project roots declare sub-projects in settings.gradle / settings.gradle.kts
@@ -47,6 +53,10 @@ const MAVEN_CANDIDATES = [
   // Gradle multi-project roots only have a settings file at the root level
   "settings.gradle",
   "settings.gradle.kts",
+  // Gradle version catalog — canonical location is gradle/libs.versions.toml,
+  // but some projects place it at the repo root.
+  "gradle/libs.versions.toml",
+  "libs.versions.toml",
 ] as const;
 
 export async function hasMavenOrGradleFiles(dir: string): Promise<boolean> {
@@ -205,6 +215,106 @@ export function parseBuildGradleContent(raw: string): PackageRef[] {
   return refs;
 }
 
+// ── Gradle version catalog parser (libs.versions.toml) ───────────────────────
+
+/**
+ * Parse a Gradle version catalog (libs.versions.toml).
+ *
+ * Handles the [versions] and [libraries] sections only; [bundles] and [plugins]
+ * are ignored. Library entries support two forms:
+ *
+ *   # inline version
+ *   logback = { module = "ch.qos.logback:logback-classic", version = "1.4.11" }
+ *
+ *   # version reference
+ *   jackson = { group = "com.fasterxml.jackson.core", name = "jackson-databind", version.ref = "jackson" }
+ *
+ * Multi-line TOML is not supported — version catalog files always use single-line
+ * inline tables in practice.
+ */
+export function parseVersionCatalogContent(raw: string): { refs: PackageRef[]; versionlessCount: number } {
+  const refs: PackageRef[] = [];
+  const seen = new Set<string>();
+  let versionlessCount = 0;
+
+  // Pass 1: collect [versions] → version alias map
+  const versionMap = new Map<string, string>();
+  let section = "";
+  for (const line of raw.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+
+    const sectionM = trimmed.match(/^\[(\w+)\]$/);
+    if (sectionM) { section = sectionM[1]!; continue; }
+
+    if (section === "versions") {
+      // key = "value"  or  key = { require = "value", ... }
+      const m = trimmed.match(/^[\w-]+\s*=\s*"([^"]+)"/);
+      if (m) {
+        const key = trimmed.split(/\s*=/)[0]!.trim();
+        versionMap.set(key, m[1]!);
+      }
+    }
+  }
+
+  // Pass 2: collect [libraries]
+  section = "";
+  for (const line of raw.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+
+    const sectionM = trimmed.match(/^\[(\w+)\]$/);
+    if (sectionM) { section = sectionM[1]!; continue; }
+
+    if (section !== "libraries") continue;
+
+    // Resolve group:artifact
+    let groupId: string | null = null;
+    let artifactId: string | null = null;
+
+    const moduleM = trimmed.match(/\bmodule\s*=\s*"([^"]+)"/);
+    if (moduleM) {
+      const [g, a] = moduleM[1]!.split(":");
+      groupId = g ?? null;
+      artifactId = a ?? null;
+    } else {
+      const groupM = trimmed.match(/\bgroup\s*=\s*"([^"]+)"/);
+      const nameM = trimmed.match(/\bname\s*=\s*"([^"]+)"/);
+      groupId = groupM?.[1] ?? null;
+      artifactId = nameM?.[1] ?? null;
+    }
+
+    if (!groupId || !artifactId) continue;
+
+    // Resolve version: prefer version.ref, fall back to inline version = "..."
+    let version: string | null = null;
+    const versionRefM = trimmed.match(/\bversion\.ref\s*=\s*"([^"]+)"/);
+    if (versionRefM) {
+      version = versionMap.get(versionRefM[1]!) ?? null;
+    } else {
+      // Match `version = "..."` but not `version.ref = "..."`
+      const versionM = trimmed.match(/\bversion\s*=\s*"([^"]+)"/);
+      if (versionM && !trimmed.includes("version.ref")) {
+        version = versionM[1]!;
+      }
+    }
+
+    if (!version) {
+      versionlessCount++;
+      continue;
+    }
+    if (RANGE_RE.test(version)) continue;
+
+    const name = `${groupId}:${artifactId}`;
+    const key = `${name}@${version}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    refs.push({ name, version, resolved: "", integrity: null });
+  }
+
+  return { refs, versionlessCount };
+}
+
 // ── Multi-module helpers ──────────────────────────────────────────────────────
 
 /**
@@ -259,7 +369,8 @@ export function extractGradleSubprojects(raw: string): string[] {
 
 /**
  * Parse lockfile content by filename.
- * Returns { refs, versionlessCount } — versionlessCount is non-zero only for pom.xml.
+ * Returns { refs, versionlessCount } — versionlessCount is non-zero only for pom.xml
+ * and libs.versions.toml (BOM-managed / no-version entries).
  */
 export function parseMavenLockfileContent(
   content: string,
@@ -270,6 +381,7 @@ export function parseMavenLockfileContent(
   if (filename === "build.gradle" || filename === "build.gradle.kts") {
     return { refs: parseBuildGradleContent(content), versionlessCount: 0 };
   }
+  if (filename.endsWith("libs.versions.toml")) return parseVersionCatalogContent(content);
   return { refs: [], versionlessCount: 0 };
 }
 

@@ -4,6 +4,7 @@ import {
   parseGradleLockfileContent,
   parseBuildGradleContent,
   parseMavenLockfileContent,
+  parseVersionCatalogContent,
   extractPomModules,
   extractGradleSubprojects,
 } from "../src/lockfile/maven-parser.js";
@@ -409,5 +410,112 @@ describe("pattern matching — Maven / Java", () => {
     const hooks = { "Loader.java": `Class.forName(className)` };
     const { findings } = scanPackage(hooks, emptyFileMap, "low");
     expect(findings.some((f) => f.category === "java_classload")).toBe(true);
+  });
+});
+
+// ── Gradle version catalog parser (libs.versions.toml) ───────────────────────
+
+describe("parseVersionCatalogContent", () => {
+  const CATALOG = `
+[versions]
+jackson = "2.14.0"
+spring = "5.3.30"
+guava = "31.1-jre"
+
+[libraries]
+jackson-databind = { group = "com.fasterxml.jackson.core", name = "jackson-databind", version.ref = "jackson" }
+spring-core = { group = "org.springframework", name = "spring-core", version.ref = "spring" }
+guava = { module = "com.google.guava:guava", version.ref = "guava" }
+logback = { module = "ch.qos.logback:logback-classic", version = "1.4.11" }
+
+[bundles]
+test-libs = ["jackson-databind"]
+
+[plugins]
+android = { id = "com.android.application", version = "8.0.0" }
+`;
+
+  it("resolves version.ref entries", () => {
+    const { refs } = parseVersionCatalogContent(CATALOG);
+    const jackson = refs.find((r) => r.name === "com.fasterxml.jackson.core:jackson-databind");
+    expect(jackson?.version).toBe("2.14.0");
+  });
+
+  it("resolves group+name form", () => {
+    const { refs } = parseVersionCatalogContent(CATALOG);
+    const spring = refs.find((r) => r.name === "org.springframework:spring-core");
+    expect(spring?.version).toBe("5.3.30");
+  });
+
+  it("resolves module shorthand form", () => {
+    const { refs } = parseVersionCatalogContent(CATALOG);
+    const guava = refs.find((r) => r.name === "com.google.guava:guava");
+    expect(guava?.version).toBe("31.1-jre");
+  });
+
+  it("resolves inline version (no ref)", () => {
+    const { refs } = parseVersionCatalogContent(CATALOG);
+    const logback = refs.find((r) => r.name === "ch.qos.logback:logback-classic");
+    expect(logback?.version).toBe("1.4.11");
+  });
+
+  it("ignores [bundles] and [plugins] sections", () => {
+    const { refs } = parseVersionCatalogContent(CATALOG);
+    // plugins section has no library entries — result count should be exactly 4
+    expect(refs).toHaveLength(4);
+  });
+
+  it("counts entries with no resolvable version", () => {
+    const catalog = `
+[versions]
+# empty
+
+[libraries]
+foo = { module = "com.example:foo" }
+bar = { group = "com.example", name = "bar" }
+baz = { module = "com.example:baz", version.ref = "missing" }
+`;
+    const { refs, versionlessCount } = parseVersionCatalogContent(catalog);
+    expect(refs).toHaveLength(0);
+    expect(versionlessCount).toBe(3);
+  });
+
+  it("deduplicates repeated entries", () => {
+    const catalog = `
+[versions]
+v = "1.0"
+
+[libraries]
+foo = { module = "com.example:foo", version.ref = "v" }
+foo2 = { module = "com.example:foo", version.ref = "v" }
+`;
+    const { refs } = parseVersionCatalogContent(catalog);
+    expect(refs).toHaveLength(1);
+  });
+
+  it("dispatches via parseMavenLockfileContent for gradle/libs.versions.toml filename", () => {
+    const catalog = `
+[versions]
+v = "2.0"
+
+[libraries]
+dep = { module = "com.example:dep", version.ref = "v" }
+`;
+    const { refs } = parseMavenLockfileContent(catalog, "gradle/libs.versions.toml");
+    expect(refs).toHaveLength(1);
+    expect(refs[0]?.version).toBe("2.0");
+  });
+
+  it("dispatches via parseMavenLockfileContent for libs.versions.toml filename", () => {
+    const catalog = `
+[versions]
+v = "3.0"
+
+[libraries]
+dep = { module = "com.example:dep", version.ref = "v" }
+`;
+    const { refs } = parseMavenLockfileContent(catalog, "libs.versions.toml");
+    expect(refs).toHaveLength(1);
+    expect(refs[0]?.version).toBe("3.0");
   });
 });
