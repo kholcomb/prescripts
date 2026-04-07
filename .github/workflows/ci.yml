@@ -14,6 +14,7 @@ on:
 permissions:
   contents: read
   security-events: write   # required for SARIF upload
+  pull-requests: write     # required for PR comment
 
 jobs:
   ci:
@@ -45,3 +46,16 @@ jobs:
         if: always()   # upload even when the scan step fails
         with:
           sarif_file: results.sarif
+
+      - name: Diff changed packages
+        if: github.event_name == 'pull_request'
+        run: node dist/src/index.js diff --base origin/${{ github.base_ref }} --output-dir .
+
+      - name: Post PR comment
+        if: github.event_name == 'pull_request'
+        run: |
+          gh pr comment ${{ github.event.pull_request.number }} \
+            --body-file diff.md --edit-last \
+            || gh pr comment ${{ github.event.pull_request.number }} --body-file diff.md
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
