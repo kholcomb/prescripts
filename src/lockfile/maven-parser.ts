@@ -76,10 +76,13 @@ const RANGE_RE = /[\[(,)]/;
 /**
  * Parse a pom.xml string and return PackageRef[].
  * Skips test/provided/system scope and range versions.
+ * versionlessCount is the number of non-test deps that had no explicit version
+ * (BOM/parent-managed) — callers use this to emit incomplete-scan warnings.
  */
-export function parsePomContent(raw: string): PackageRef[] {
+export function parsePomContent(raw: string): { refs: PackageRef[]; versionlessCount: number } {
   const refs: PackageRef[] = [];
   const seen = new Set<string>();
+  let versionlessCount = 0;
 
   // Extract all <dependency> blocks (handles nested indentation)
   const depBlockRe = /<dependency>([\s\S]*?)<\/dependency>/g;
@@ -98,10 +101,12 @@ export function parsePomContent(raw: string): PackageRef[] {
     // Skip scopes we don't care about
     if (scope && SKIP_SCOPES.has(scope.toLowerCase())) continue;
 
-    // Skip if version is missing or is a range/property
-    if (!version) continue;
+    // Skip if version is missing or is a range/property — but count them
+    if (!version || version.startsWith("${")) {
+      versionlessCount++;
+      continue;
+    }
     if (RANGE_RE.test(version)) continue;    // e.g. [1.0,2.0)
-    if (version.startsWith("${")) continue;  // Maven property: ${someVersion}
 
     const name = `${groupId}:${artifactId}`;
     const key = `${name}@${version}`;
@@ -111,7 +116,7 @@ export function parsePomContent(raw: string): PackageRef[] {
     refs.push({ name, version, resolved: "", integrity: null });
   }
 
-  return refs;
+  return { refs, versionlessCount };
 }
 
 function extractXmlTag(block: string, tag: string): string | null {
@@ -254,34 +259,34 @@ export function extractGradleSubprojects(raw: string): string[] {
 
 /**
  * Parse lockfile content by filename.
+ * Returns { refs, versionlessCount } — versionlessCount is non-zero only for pom.xml.
  */
-export function parseMavenLockfileContent(content: string, filename: string): PackageRef[] {
+export function parseMavenLockfileContent(
+  content: string,
+  filename: string
+): { refs: PackageRef[]; versionlessCount: number } {
   if (filename === "pom.xml") return parsePomContent(content);
-  if (filename === "gradle.lockfile") return parseGradleLockfileContent(content);
+  if (filename === "gradle.lockfile") return { refs: parseGradleLockfileContent(content), versionlessCount: 0 };
   if (filename === "build.gradle" || filename === "build.gradle.kts") {
-    return parseBuildGradleContent(content);
+    return { refs: parseBuildGradleContent(content), versionlessCount: 0 };
   }
-  return [];
+  return { refs: [], versionlessCount: 0 };
 }
 
 const MAX_MODULE_DEPTH = 5;
 
-/**
- * Find and parse all Maven/Gradle files in `dir`, recursively following
- * sub-module declarations from pom.xml <modules> and settings.gradle include().
- * Results are merged and deduped by name@version across all modules.
- */
-export async function parseMavenLockfile(
+// Internal recursive helper — carries raw versionlessCount rather than a
+// formatted string so the top-level call can produce one consolidated warning.
+async function parseMavenLockfileInternal(
   dir: string,
-  _depth = 0
-): Promise<{ refs: PackageRef[]; lockfileDir: string } | null> {
+  seen: Set<string>,
+  depth: number
+): Promise<{ refs: PackageRef[]; versionlessCount: number }> {
   const filenames = await getMavenLockfilePaths(dir);
-  if (filenames.length === 0) return null;
+  if (filenames.length === 0) return { refs: [], versionlessCount: 0 };
 
-  const seen = new Set<string>();
   const allRefs: PackageRef[] = [];
-
-  // Track raw content for sub-module discovery
+  let versionlessCount = 0;
   const rawByFile = new Map<string, string>();
 
   for (const filename of filenames) {
@@ -292,7 +297,9 @@ export async function parseMavenLockfile(
       continue;
     }
     rawByFile.set(filename, raw);
-    for (const ref of parseMavenLockfileContent(raw, filename)) {
+    const parsed = parseMavenLockfileContent(raw, filename);
+    versionlessCount += parsed.versionlessCount;
+    for (const ref of parsed.refs) {
       const key = `${ref.name}@${ref.version}`;
       if (!seen.has(key)) {
         seen.add(key);
@@ -301,15 +308,12 @@ export async function parseMavenLockfile(
     }
   }
 
-  // Discover sub-module paths
-  if (_depth < MAX_MODULE_DEPTH) {
+  if (depth < MAX_MODULE_DEPTH) {
     const subPaths = new Set<string>();
-
     const pomRaw = rawByFile.get("pom.xml");
     if (pomRaw) {
       for (const p of extractPomModules(pomRaw)) subPaths.add(p);
     }
-
     for (const settingsFile of ["settings.gradle", "settings.gradle.kts"] as const) {
       const settingsRaw = rawByFile.get(settingsFile);
       if (settingsRaw) {
@@ -317,22 +321,39 @@ export async function parseMavenLockfile(
       }
     }
 
-    // Recursively scan each sub-module directory
-    await Promise.all(
-      [...subPaths].map(async (subPath) => {
-        const subResult = await parseMavenLockfile(join(dir, subPath), _depth + 1);
-        if (!subResult) return;
-        for (const ref of subResult.refs) {
-          const key = `${ref.name}@${ref.version}`;
-          if (!seen.has(key)) {
-            seen.add(key);
-            allRefs.push(ref);
-          }
-        }
-      })
+    const subResults = await Promise.all(
+      [...subPaths].map((subPath) =>
+        parseMavenLockfileInternal(join(dir, subPath), seen, depth + 1)
+      )
     );
+    for (const sub of subResults) {
+      versionlessCount += sub.versionlessCount;
+      allRefs.push(...sub.refs); // already deduped via shared `seen`
+    }
   }
 
-  if (allRefs.length === 0) return null;
-  return { refs: allRefs, lockfileDir: dir };
+  return { refs: allRefs, versionlessCount };
+}
+
+/**
+ * Find and parse all Maven/Gradle files in `dir`, recursively following
+ * sub-module declarations from pom.xml <modules> and settings.gradle include().
+ * Results are merged and deduped by name@version across all modules.
+ *
+ * Returns a `warnings` array when BOM/parent-managed dependencies were skipped
+ * (versionless deps in pom.xml) so callers can surface an incomplete-scan notice.
+ */
+export async function parseMavenLockfile(
+  dir: string
+): Promise<{ refs: PackageRef[]; lockfileDir: string; warnings?: string[] } | null> {
+  const seen = new Set<string>();
+  const { refs, versionlessCount } = await parseMavenLockfileInternal(dir, seen, 0);
+
+  if (refs.length === 0 && versionlessCount === 0) return null;
+
+  const warnings: string[] | undefined = versionlessCount > 0
+    ? [`${versionlessCount} Maven ${versionlessCount === 1 ? "dependency" : "dependencies"} skipped: no explicit version (BOM/parent POM managed). Results may be incomplete.`]
+    : undefined;
+
+  return { refs, lockfileDir: dir, warnings };
 }

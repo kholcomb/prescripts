@@ -42,32 +42,32 @@ describe("parsePomContent", () => {
 </project>`;
 
   it("parses groupId:artifactId as name", () => {
-    const refs = parsePomContent(POM);
+    const { refs } = parsePomContent(POM);
     const names = refs.map((r) => r.name);
     expect(names).toContain("com.fasterxml.jackson.core:jackson-databind");
     expect(names).toContain("org.springframework:spring-core");
   });
 
   it("skips test scope", () => {
-    const refs = parsePomContent(POM);
+    const { refs } = parsePomContent(POM);
     const names = refs.map((r) => r.name);
     expect(names).not.toContain("junit:junit");
   });
 
   it("skips provided scope", () => {
-    const refs = parsePomContent(POM);
+    const { refs } = parsePomContent(POM);
     const names = refs.map((r) => r.name);
     expect(names).not.toContain("javax.servlet:javax.servlet-api");
   });
 
   it("sets correct versions", () => {
-    const refs = parsePomContent(POM);
+    const { refs } = parsePomContent(POM);
     const jackson = refs.find((r) => r.name === "com.fasterxml.jackson.core:jackson-databind");
     expect(jackson?.version).toBe("2.14.0");
   });
 
   it("integrity is null (Maven Central provides SHA separately)", () => {
-    const refs = parsePomContent(POM);
+    const { refs } = parsePomContent(POM);
     expect(refs.every((r) => r.integrity === null)).toBe(true);
   });
 
@@ -78,19 +78,31 @@ describe("parsePomContent", () => {
         <version>[1.0,2.0)</version>
       </dependency>
     </dependencies></project>`;
-    const refs = parsePomContent(pom);
+    const { refs } = parsePomContent(pom);
     expect(refs).toHaveLength(0);
   });
 
-  it("skips property placeholder versions", () => {
+  it("skips property placeholder versions and counts them", () => {
     const pom = `<project><dependencies>
       <dependency>
         <groupId>com.example</groupId><artifactId>foo</artifactId>
         <version>${"${spring.version}"}</version>
       </dependency>
     </dependencies></project>`;
-    const refs = parsePomContent(pom);
+    const { refs, versionlessCount } = parsePomContent(pom);
     expect(refs).toHaveLength(0);
+    expect(versionlessCount).toBe(1);
+  });
+
+  it("counts versionless (BOM-managed) dependencies", () => {
+    const pom = `<project><dependencies>
+      <dependency><groupId>g</groupId><artifactId>a</artifactId></dependency>
+      <dependency><groupId>g</groupId><artifactId>b</artifactId></dependency>
+      <dependency><groupId>g</groupId><artifactId>c</artifactId><version>1.0</version></dependency>
+    </dependencies></project>`;
+    const { refs, versionlessCount } = parsePomContent(pom);
+    expect(refs).toHaveLength(1);
+    expect(versionlessCount).toBe(2);
   });
 
   it("deduplicates repeated entries", () => {
@@ -98,7 +110,7 @@ describe("parsePomContent", () => {
       <dependency><groupId>g</groupId><artifactId>a</artifactId><version>1.0</version></dependency>
       <dependency><groupId>g</groupId><artifactId>a</artifactId><version>1.0</version></dependency>
     </dependencies></project>`;
-    const refs = parsePomContent(pom);
+    const { refs } = parsePomContent(pom);
     expect(refs).toHaveLength(1);
   });
 });
@@ -188,20 +200,20 @@ describe("parseMavenLockfileContent", () => {
     const pom = `<project><dependencies>
       <dependency><groupId>g</groupId><artifactId>a</artifactId><version>1.0</version></dependency>
     </dependencies></project>`;
-    const refs = parseMavenLockfileContent(pom, "pom.xml");
+    const { refs } = parseMavenLockfileContent(pom, "pom.xml");
     expect(refs).toHaveLength(1);
     expect(refs[0]?.name).toBe("g:a");
   });
 
   it("dispatches to gradle lockfile parser for gradle.lockfile", () => {
     const lock = `com.example:foo:1.0=runtimeClasspath`;
-    const refs = parseMavenLockfileContent(lock, "gradle.lockfile");
+    const { refs } = parseMavenLockfileContent(lock, "gradle.lockfile");
     expect(refs).toHaveLength(1);
     expect(refs[0]?.name).toBe("com.example:foo");
   });
 
   it("returns empty for unknown filename", () => {
-    const refs = parseMavenLockfileContent("anything", "settings.gradle");
+    const { refs } = parseMavenLockfileContent("anything", "settings.gradle");
     expect(refs).toHaveLength(0);
   });
 });

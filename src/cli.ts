@@ -105,7 +105,10 @@ export async function runScan(dir: string, opts: ScanOptions, pm?: string): Prom
       plugin.init(mergedOpts);
       const parsed = await plugin.parseLockfile(projectDir);
       if (!parsed) return null;
-      const { refs, lockfileDir } = parsed;
+      const { refs, lockfileDir, warnings } = parsed;
+      if (warnings) {
+        for (const w of warnings) process.stderr.write(`warning: ${w}\n`);
+      }
       const advisoryMap = await plugin.fetchAdvisories(refs, mergedOpts);
       return { plugin, refs, lockfileDir, advisoryMap };
     })

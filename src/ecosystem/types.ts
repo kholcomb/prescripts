@@ -69,7 +69,7 @@ export interface EcosystemPlugin {
    * Parses the lockfile found in `dir` and returns all PackageRefs to scan.
    * Returns null if no lockfile is found.
    */
-  parseLockfile(dir: string): Promise<{ refs: PackageRef[]; lockfileDir: string } | null>;
+  parseLockfile(dir: string): Promise<{ refs: PackageRef[]; lockfileDir: string; warnings?: string[] } | null>;
 
   /**
    * Resolves a CLI package spec ("name@version" or "name") to the set of
