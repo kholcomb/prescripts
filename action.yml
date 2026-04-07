@@ -24,7 +24,10 @@ inputs:
     description: 'Directory to write report.json and results.sarif'
     default: '.'
   version:
-    description: 'prescripts version to install (npm dist-tag or exact version)'
+    description: >
+      prescripts version to install. Accepts an npm dist-tag (latest),
+      an exact version (1.2.3), or a path to a local .tgz tarball
+      (./prescripts-1.2.3.tgz) for testing pre-release builds.
     default: 'latest'
 
 outputs:
@@ -40,7 +43,15 @@ runs:
   steps:
     - name: Install prescripts
       shell: bash
-      run: npm install -g prescripts@${{ inputs.version }}
+      # Support local tarballs (path ends in .tgz or starts with ./ or /)
+      # so pre-release builds can be tested before publishing to npm.
+      run: |
+        VERSION="${{ inputs.version }}"
+        if [[ "$VERSION" == *.tgz ]] || [[ "$VERSION" == ./* ]] || [[ "$VERSION" == /* ]]; then
+          npm install -g "$VERSION"
+        else
+          npm install -g "prescripts@$VERSION"
+        fi
 
     - name: Scan dependencies
       shell: bash
