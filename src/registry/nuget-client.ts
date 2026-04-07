@@ -24,9 +24,9 @@ export function setNugetTimeout(ms: number): void {
 function getRegistrationBase(): string {
   const override = process.env["NUGET_SOURCE_URL"];
   if (override) {
-    return override.replace(/\/$/, "") + "/registration5";
+    return override.replace(/\/$/, "") + "/registration5-semver1";
   }
-  return "https://api.nuget.org/v3/registration5";
+  return "https://api.nuget.org/v3/registration5-semver1";
 }
 
 function getFlatcontainerBase(): string {
@@ -55,10 +55,14 @@ async function fetchNugetJson(url: string): Promise<unknown | null> {
 // ── API response shapes ────────────────────────────────────────────────────────
 
 interface RegistrationLeaf {
+  /** ISO-8601 publish date — top-level field in the leaf response. */
   published?: string;
   listed?: boolean;
   deprecation?: unknown;
   packageContent?: string;
+  catalogEntry?: {
+    deprecation?: unknown;
+  };
 }
 
 interface SearchData {
@@ -118,7 +122,7 @@ export async function fetchNugetMeta(
   const uploadTime = regData?.published
     ? new Date(regData.published).toISOString()
     : null;
-  const deprecated = !!(regData?.deprecation) || regData?.listed === false;
+  const deprecated = !!(regData?.deprecation ?? regData?.catalogEntry?.deprecation) || regData?.listed === false;
 
   // Parse search-level stats
   const searchPkg = searchData?.data?.[0];
