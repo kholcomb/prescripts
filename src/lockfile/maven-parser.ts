@@ -351,9 +351,14 @@ export async function parseMavenLockfile(
 
   if (refs.length === 0 && versionlessCount === 0) return null;
 
-  const warnings: string[] | undefined = versionlessCount > 0
-    ? [`${versionlessCount} Maven ${versionlessCount === 1 ? "dependency" : "dependencies"} skipped: no explicit version (BOM/parent POM managed). Results may be incomplete.`]
-    : undefined;
+  if (versionlessCount > 0) {
+    const noun = versionlessCount === 1 ? "dependency" : "dependencies";
+    return {
+      refs,
+      lockfileDir: dir,
+      warnings: [`${versionlessCount} Maven ${noun} skipped: no explicit version (BOM/parent POM managed). Results may be incomplete.`],
+    };
+  }
 
-  return { refs, lockfileDir: dir, warnings };
+  return { refs, lockfileDir: dir };
 }
