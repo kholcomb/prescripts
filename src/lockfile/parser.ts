@@ -119,7 +119,7 @@ export async function parseLockfile(dir: string): Promise<ParseResult> {
   if (!raw) {
     throw new Error(
       `No package-lock.json or npm-shrinkwrap.json found in ${dir}. ` +
-        `npm-prescripts requires an npm lockfile. ` +
+        `prescripts requires an npm lockfile. ` +
         `For Yarn or pnpm projects, lockfile support is not yet implemented.`
     );
   }

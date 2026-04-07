@@ -1,5 +1,5 @@
 /**
- * EcosystemPlugin interface — the single abstraction that lets npm-prescripts
+ * EcosystemPlugin interface — the single abstraction that lets prescripts
  * support arbitrary package managers without duplicating the scan loop.
  *
  * Each ecosystem (npm, pip, Cargo, RubyGems, Composer, …) implements this

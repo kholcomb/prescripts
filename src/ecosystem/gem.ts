@@ -149,7 +149,7 @@ export class GemPlugin implements EcosystemPlugin {
       integrityVerified = sha256hex === expected;
     }
 
-    const tempDir = await mkdtemp(join(tmpdir(), "npm-prescripts-gem-"));
+    const tempDir = await mkdtemp(join(tmpdir(), "prescripts-gem-"));
     const fileMap = new Map<string, string>();
 
     await extractGem(bytes, tempDir, fileMap);

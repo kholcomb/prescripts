@@ -1,5 +1,5 @@
 {
-  "name": "npm-prescripts",
+  "name": "prescripts",
   "version": "0.1.0",
   "description": "Static lifecycle script scanner for npm dependencies — triage tool for humans and LLM agents",
   "type": "module",
@@ -7,7 +7,7 @@
     "node": ">=20.0.0"
   },
   "bin": {
-    "npm-prescripts": "./dist/src/index.js"
+    "prescripts": "./dist/src/index.js"
   },
   "main": "./dist/src/index.js",
   "exports": {

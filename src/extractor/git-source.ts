@@ -67,7 +67,7 @@ export async function extractGitSource(
 ): Promise<{ extracted: ExtractedPackage; integrityVerified: boolean }> {
   const { url, ref } = parseGitUrl(resolved);
 
-  const cloneDir = await mkdtemp(join(tmpdir(), "npm-prescripts-git-"));
+  const cloneDir = await mkdtemp(join(tmpdir(), "prescripts-git-"));
   const git = simpleGit();
 
   await git.clone(url, cloneDir, ["--depth", "1", ...(ref ? ["--branch", ref] : [])]);

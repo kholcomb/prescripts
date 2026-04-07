@@ -9,7 +9,7 @@ describe("DiskCache", () => {
   let cache: DiskCache;
 
   beforeEach(async () => {
-    tmpDir = await mkdtemp(join(tmpdir(), "npm-prescripts-test-"));
+    tmpDir = await mkdtemp(join(tmpdir(), "prescripts-test-"));
     cache = new DiskCache(tmpDir);
   });
 

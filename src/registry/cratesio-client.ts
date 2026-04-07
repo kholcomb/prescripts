@@ -17,7 +17,7 @@ const CRATES_BASE = "https://crates.io/api/v1/crates";
 const STATIC_BASE = "https://static.crates.io/crates";
 
 // crates.io requires a descriptive User-Agent — anonymous requests get 403
-const USER_AGENT = "npm-prescripts/0.1 (supply chain security scanner; https://github.com/npm-prescripts)";
+const USER_AGENT = "prescripts/0.1 (supply chain security scanner; https://github.com/prescripts)";
 
 let cratesTimeout = 30_000;
 

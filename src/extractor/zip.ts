@@ -127,7 +127,7 @@ export async function downloadAndExtractZip(
 ): Promise<{ fileMap: Map<string, string>; sha256hex: string }> {
   const sha256hex = createHash("sha256").update(bytes).digest("hex");
 
-  const tempDir = await mkdtemp(join(tmpdir(), "npm-prescripts-zip-"));
+  const tempDir = await mkdtemp(join(tmpdir(), "prescripts-zip-"));
   const zipPath = join(tempDir, "pkg.zip");
 
   try {

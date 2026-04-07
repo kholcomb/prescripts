@@ -3,7 +3,7 @@ import { join } from "node:path";
 import type { NpmPrescriptsConfig, RiskLevel, TrustConfig } from "./types.js";
 import { DEFAULT_TRUST, DEFAULT_MIN_RISK } from "./analyzer/confidence.js";
 
-const CONFIG_FILE = ".npm-prescriptsrc.json";
+const CONFIG_FILE = ".prescriptsrc.json";
 
 interface RawConfig {
   minRisk?: RiskLevel;

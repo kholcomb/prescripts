@@ -257,7 +257,7 @@ export function renderDiffMarkdown(result: DiffResult): string {
   const { comparisons, added, baseRef } = result;
 
   if (comparisons.length === 0 && added.length === 0) {
-    return `## ✅ npm-prescripts: no package changes detected\n\n_Compared against \`${baseRef}\`._\n`;
+    return `## ✅ prescripts: no package changes detected\n\n_Compared against \`${baseRef}\`._\n`;
   }
 
   const interesting = comparisons.filter(isInteresting);
@@ -283,12 +283,12 @@ export function renderDiffMarkdown(result: DiffResult): string {
 
   const headline =
     hasNewFindings
-      ? `## ⚠️ npm-prescripts: ${summaryParts} — new findings`
+      ? `## ⚠️ prescripts: ${summaryParts} — new findings`
       : hasBinaryHostChange
-      ? `## ⚠️ npm-prescripts: ${summaryParts} — binary host changed`
+      ? `## ⚠️ prescripts: ${summaryParts} — binary host changed`
       : hasScriptChanges
-      ? `## 🔍 npm-prescripts: ${summaryParts} — install scripts present`
-      : `## ✅ npm-prescripts: ${summaryParts} — no install-time concerns`;
+      ? `## 🔍 prescripts: ${summaryParts} — install scripts present`
+      : `## ✅ prescripts: ${summaryParts} — no install-time concerns`;
 
   const lines: string[] = [
     headline,

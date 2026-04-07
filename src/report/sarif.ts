@@ -5,7 +5,7 @@
  * findings in the repository Security tab with zero additional configuration.
  *
  * Usage in CI:
- *   npm-prescripts scan --sarif -o results.sarif
+ *   prescripts scan --sarif -o results.sarif
  *   # then upload-sarif action points at results.sarif
  */
 
@@ -63,7 +63,7 @@ function buildRules(): SarifRule[] {
       .join(""),
     shortDescription: { text: def.description },
     defaultConfiguration: { level: sarifLevel(def.severity) },
-    helpUri: "https://github.com/kholcomb/npm-prescripts",
+    helpUri: "https://github.com/kholcomb/prescripts",
     properties: { tags: ["security", "supply-chain"] },
   }));
 
@@ -166,9 +166,9 @@ export function toSarif(report: ProjectReport): string {
       {
         tool: {
           driver: {
-            name: "npm-prescripts",
+            name: "prescripts",
             version: "0.1.0",
-            informationUri: "https://github.com/kholcomb/npm-prescripts",
+            informationUri: "https://github.com/kholcomb/prescripts",
             rules,
           },
         },

@@ -138,7 +138,7 @@ export class CargoPlugin implements EcosystemPlugin {
       integrityVerified = sha256hex === expected;
     }
 
-    const tempDir = await mkdtemp(join(tmpdir(), "npm-prescripts-rs-"));
+    const tempDir = await mkdtemp(join(tmpdir(), "prescripts-rs-"));
     const extractDir = join(tempDir, "extracted");
     await mkdir(extractDir, { recursive: true });
 

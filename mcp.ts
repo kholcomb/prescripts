@@ -30,7 +30,7 @@ const DEFAULT_OPTS: ScanOptions = {
 };
 
 const server = new Server(
-  { name: "npm-prescripts", version: "0.1.0" },
+  { name: "prescripts", version: "0.1.0" },
   { capabilities: { tools: {} } }
 );
 
@@ -254,7 +254,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 async function main(): Promise<void> {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  process.stderr.write("npm-prescripts MCP server running\n");
+  process.stderr.write("prescripts MCP server running\n");
 }
 
 main().catch((err) => {

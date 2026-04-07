@@ -1,4 +1,4 @@
-# Publishes npm-prescripts to the npm registry with Sigstore provenance attestation.
+# Publishes prescripts to the npm registry with Sigstore provenance attestation.
 # Triggered by pushing a version tag (v*.*.*).
 #
 # npm publish --provenance creates a Sigstore attestation automatically when

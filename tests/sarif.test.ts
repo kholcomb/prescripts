@@ -59,7 +59,7 @@ describe("toSarif", () => {
   it("includes tool driver with name and rules", () => {
     const sarif = JSON.parse(toSarif(makeReport([])));
     const driver = sarif.runs[0].tool.driver;
-    expect(driver.name).toBe("npm-prescripts");
+    expect(driver.name).toBe("prescripts");
     expect(Array.isArray(driver.rules)).toBe(true);
     expect(driver.rules.length).toBeGreaterThan(0);
   });

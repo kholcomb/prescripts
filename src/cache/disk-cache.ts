@@ -10,7 +10,7 @@ import type { CachedMeta, ExtractedPackage, SourceType } from "../types.js";
 
 function defaultCacheDir(): string {
   const xdg = process.env["XDG_CACHE_HOME"];
-  return xdg ? join(xdg, "npm-prescripts") : join(homedir(), ".cache", "npm-prescripts");
+  return xdg ? join(xdg, "prescripts") : join(homedir(), ".cache", "prescripts");
 }
 
 function cacheKey(name: string, integrity: string | null, version: string): string {

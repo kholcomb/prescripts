@@ -86,7 +86,7 @@ export async function extractTarball(
     }
   }
 
-  const tempDir = await mkdtemp(join(tmpdir(), "npm-prescripts-"));
+  const tempDir = await mkdtemp(join(tmpdir(), "prescripts-"));
   const tgzPath = join(tempDir, "pkg.tgz");
   await writeFile(tgzPath, bytes);
 

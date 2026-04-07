@@ -142,7 +142,7 @@ export async function extractPythonPackage(
   }
 
   const isWheel = tarballUrl.endsWith(".whl");
-  const tempDir = await mkdtemp(join(tmpdir(), "npm-prescripts-py-"));
+  const tempDir = await mkdtemp(join(tmpdir(), "prescripts-py-"));
   const extractDir = join(tempDir, "extracted");
   await mkdir(extractDir, { recursive: true });
 
