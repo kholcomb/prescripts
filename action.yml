@@ -1,0 +1,78 @@
+name: 'prescripts'
+description: 'Scan project dependencies for supply-chain threats and malicious install scripts'
+author: 'kholcomb'
+
+branding:
+  icon: 'shield'
+  color: 'red'
+
+inputs:
+  min-risk:
+    description: >
+      Minimum risk level to surface and fail on.
+      One of: verified | low | medium | high | critical
+    default: 'medium'
+  only-flagged:
+    description: 'Suppress packages with no findings from output'
+    default: 'false'
+  upload-sarif:
+    description: >
+      Upload SARIF results to the GitHub Security tab.
+      Requires the job to have `security-events: write` permission.
+    default: 'true'
+  output-dir:
+    description: 'Directory to write report.json and results.sarif'
+    default: '.'
+  version:
+    description: >
+      prescripts version to install. Accepts an npm dist-tag (latest),
+      an exact version (1.2.3), or a path to a local .tgz tarball
+      (./prescripts-1.2.3.tgz) for testing pre-release builds.
+    default: 'latest'
+
+outputs:
+  sarif-file:
+    description: 'Path to the generated SARIF file'
+    value: ${{ steps.paths.outputs.sarif-file }}
+  json-file:
+    description: 'Path to the generated JSON report'
+    value: ${{ steps.paths.outputs.json-file }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Install prescripts
+      shell: bash
+      # Support local tarballs (path ends in .tgz or starts with ./ or /)
+      # so pre-release builds can be tested before publishing to npm.
+      run: |
+        VERSION="${{ inputs.version }}"
+        if [[ "$VERSION" == *.tgz ]] || [[ "$VERSION" == ./* ]] || [[ "$VERSION" == /* ]]; then
+          npm install -g "$VERSION"
+        else
+          npm install -g "prescripts@$VERSION"
+        fi
+
+    - name: Scan dependencies
+      shell: bash
+      # Disable exit-on-error so we can record output paths before re-raising.
+      # Exit code 1 = actionable findings (expected failure); 2 = tool error.
+      run: |
+        FLAGS="--output-dir ${{ inputs.output-dir }} --min-risk ${{ inputs.min-risk }}"
+        if [ "${{ inputs.only-flagged }}" = "true" ]; then
+          FLAGS="$FLAGS --only-flagged"
+        fi
+        set +e
+        prescripts scan . $FLAGS
+        SCAN_EXIT=$?
+        set -e
+        echo "sarif-file=${{ inputs.output-dir }}/results.sarif" >> "$GITHUB_OUTPUT"
+        echo "json-file=${{ inputs.output-dir }}/report.json" >> "$GITHUB_OUTPUT"
+        exit $SCAN_EXIT
+      id: paths
+
+    - name: Upload SARIF to GitHub Security tab
+      if: ${{ always() && inputs.upload-sarif == 'true' }}
+      uses: github/codeql-action/upload-sarif@c10b8064de6f491fea524254123dbe5e09572f13 # v4.35.1
+      with:
+        sarif_file: ${{ inputs.output-dir }}/results.sarif
