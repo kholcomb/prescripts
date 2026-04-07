@@ -47,6 +47,10 @@ jobs:
         with:
           sarif_file: results.sarif
 
+      - name: Fetch base branch blobs for diff
+        if: github.event_name == 'pull_request'
+        run: git fetch origin ${{ github.base_ref }} --no-filter --depth=1
+
       - name: Diff changed packages
         if: github.event_name == 'pull_request'
         run: node dist/src/index.js diff --base origin/${{ github.base_ref }} --output-dir .
