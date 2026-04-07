@@ -150,42 +150,217 @@ Create `.prescriptsrc.json` in your project root to set per-project defaults:
 | `trust.minVersions` | `10` | Version count threshold to consider a package "mature" |
 | `pypiAttestations` | `true` | Fetch PyPI PEP 740 attestations (set `false` in air-gapped environments) |
 
-## CI integration
+## GitHub Actions integration
 
-The quickest path to automated scanning is `init-ci`, which writes a workflow file for you. If you prefer to wire it up manually, the pattern used in this repo is:
+There are several ways to add prescripts to a workflow depending on how much control you need.
+
+### 1. Composite action (simplest)
+
+The composite action handles installation, scanning, and SARIF upload in a single step.
+
+**Minimal setup** — scans on every push and PR, uploads results to the Security tab:
+
+```yaml
+permissions:
+  contents: read
+  security-events: write   # required for SARIF upload
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - uses: kholcomb/prescripts@v0.1.0
+        with:
+          min-risk: medium
+```
+
+**With PR diff comment** — posts a security-focused diff of changed packages on every pull request:
+
+```yaml
+permissions:
+  contents: read
+  security-events: write
+  pull-requests: write     # required for PR comment
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # needed for diff against base branch
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - uses: kholcomb/prescripts@v0.1.0
+        id: prescripts
+        with:
+          min-risk: medium
+          upload-sarif: true
+          output-dir: ci-results
+
+      - name: Diff changed packages
+        if: github.event_name == 'pull_request'
+        run: |
+          prescripts diff --base origin/${{ github.base_ref }} --output-dir ci-results
+
+      - name: Post PR comment
+        if: github.event_name == 'pull_request'
+        run: |
+          gh pr comment ${{ github.event.pull_request.number }} \
+            --body-file ci-results/diff.md --edit-last \
+            || gh pr comment ${{ github.event.pull_request.number }} \
+               --body-file ci-results/diff.md
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+```
+
+**Action inputs:**
+
+| Input | Default | Description |
+|-------|---------|-------------|
+| `min-risk` | `medium` | Minimum risk level to surface and fail on: `verified` \| `low` \| `medium` \| `high` \| `critical` |
+| `only-flagged` | `false` | Suppress packages with no findings from output |
+| `upload-sarif` | `true` | Upload SARIF to the GitHub Security tab (requires `security-events: write`) |
+| `output-dir` | `.` | Directory to write `report.json` and `results.sarif` |
+| `version` | `latest` | prescripts version to install (`latest`, `1.2.3`, or path to a local `.tgz`) |
+
+**Action outputs:**
+
+| Output | Description |
+|--------|-------------|
+| `sarif-file` | Path to the generated SARIF file |
+| `json-file` | Path to the generated JSON report |
+
+---
+
+### 2. Generate a workflow with `init-ci`
+
+Run this once locally to write a ready-to-commit workflow file:
+
+```bash
+prescripts init-ci --min-risk high --with-diff
+```
+
+| Option | Description |
+|--------|-------------|
+| `--min-risk <level>` | Failure threshold (default: `medium`) |
+| `--no-fail` | Upload SARIF but always exit `0` |
+| `--with-diff` | Include PR diff comment steps |
+| `--force` | Overwrite an existing workflow file |
+
+---
+
+### 3. CLI in a `run` step
+
+For full control over the step sequence, call prescripts directly. Use `npx` to avoid a separate install step:
 
 ```yaml
 - name: Scan dependencies
-  run: prescripts scan . --output-dir . --min-risk medium
+  run: npx prescripts@latest scan . --output-dir . --min-risk medium
 
 - name: Upload SARIF
   uses: github/codeql-action/upload-sarif@v3
   if: always()
   with:
     sarif_file: results.sarif
-
-- name: Diff changed packages
-  if: github.event_name == 'pull_request'
-  run: prescripts diff --base origin/${{ github.base_ref }} --output-dir .
-
-- name: Post PR comment
-  if: github.event_name == 'pull_request'
-  run: |
-    gh pr comment ${{ github.event.pull_request.number }} \
-      --body-file diff.md --edit-last \
-      || gh pr comment ${{ github.event.pull_request.number }} --body-file diff.md
-  env:
-    GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 ```
 
-## MCP server
+Or install globally when you need the binary available across multiple steps:
 
-Prescripts ships an MCP server that exposes two tools for AI agents:
+```yaml
+- name: Install prescripts
+  run: npm install -g prescripts
 
-- `scan_package` — scan a single `name@version`
-- `compare_versions` — diff lifecycle scripts and findings between two versions
+- name: Scan
+  run: prescripts scan . --output-dir . --min-risk medium --only-flagged
 
-Add it to your Claude Code config (or any MCP-compatible client) by pointing at `mcp.ts` (or the compiled `dist/mcp.js`).
+- name: Diff
+  if: github.event_name == 'pull_request'
+  run: prescripts diff --base origin/${{ github.base_ref }} --output-dir .
+```
+
+---
+
+### 4. Single-package gate
+
+Use `prescripts check` to block a workflow before installing a newly added package:
+
+```yaml
+- name: Vet new dependency
+  run: npx prescripts@latest check ${{ env.NEW_PACKAGE }} --pm npm --min-risk high
+  env:
+    NEW_PACKAGE: some-library@2.0.0
+```
+
+This is useful in workflows that automate dependency updates (e.g. Dependabot follow-up jobs, custom upgrade PRs) where you want to gate on a single package before running the full install.
+
+---
+
+### 5. MCP server in an AI agent workflow
+
+Prescripts ships an MCP server exposing three tools:
+
+| Tool | Description |
+|------|-------------|
+| `scan_project` | Scan all packages in a project lockfile (auto-detects ecosystem) |
+| `scan_package` | Scan a single `name@version` before installing it |
+| `compare_versions` | Diff lifecycle scripts and findings between two versions |
+
+**Claude Code / local agent** — add to your MCP config:
+
+```json
+{
+  "mcpServers": {
+    "prescripts": {
+      "command": "node",
+      "args": ["/path/to/prescripts/dist/mcp.js"]
+    }
+  }
+}
+```
+
+Or if installed globally:
+
+```json
+{
+  "mcpServers": {
+    "prescripts": {
+      "command": "npx",
+      "args": ["prescripts-mcp"]
+    }
+  }
+}
+```
+
+**Agent step in a GitHub Actions workflow** — run the MCP server as a sidecar and invoke it from an agent step:
+
+```yaml
+- name: Security review (AI agent)
+  uses: anthropics/claude-code-action@v1
+  with:
+    prompt: |
+      Use the prescripts MCP tools to scan this project and summarize
+      any medium or higher risk findings. For each finding, explain
+      what the package does and whether it looks intentional.
+    mcp_config: |
+      {
+        "mcpServers": {
+          "prescripts": {
+            "command": "npx",
+            "args": ["prescripts@latest", "mcp"]
+          }
+        }
+      }
+  env:
+    ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+```
 
 ## How risk is scored
 
