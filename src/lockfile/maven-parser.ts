@@ -84,26 +84,63 @@ const SKIP_SCOPES = new Set(["test", "provided", "system"]);
 const RANGE_RE = /[\[(,)]/;
 
 /**
+ * Extract the <dependencyManagement> version map from a pom.xml.
+ * Returns a map of "groupId:artifactId" → version for all entries that have
+ * a concrete (non-range, non-property) version. Used to resolve versionless
+ * deps in child modules and in the same pom's own <dependencies> block.
+ */
+export function extractManagedVersions(raw: string): Map<string, string> {
+  const map = new Map<string, string>();
+  const block = raw.match(/<dependencyManagement>([\s\S]*?)<\/dependencyManagement>/)?.[1] ?? "";
+  if (!block) return map;
+
+  const re = /<dependency>([\s\S]*?)<\/dependency>/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(block)) !== null) {
+    const dep = m[1] ?? "";
+    const groupId = extractXmlTag(dep, "groupId");
+    const artifactId = extractXmlTag(dep, "artifactId");
+    const version = extractXmlTag(dep, "version");
+    if (groupId && artifactId && version && !version.startsWith("${") && !RANGE_RE.test(version)) {
+      map.set(`${groupId}:${artifactId}`, version);
+    }
+  }
+  return map;
+}
+
+/**
  * Parse a pom.xml string and return PackageRef[].
  * Skips test/provided/system scope and range versions.
- * versionlessCount is the number of non-test deps that had no explicit version
- * (BOM/parent-managed) — callers use this to emit incomplete-scan warnings.
+ *
+ * managedVersions — optional map from extractManagedVersions() (same file or
+ * an ancestor pom.xml). When a dep has no explicit version, the map is
+ * consulted before counting the dep as versionless.
+ *
+ * versionlessCount is the number of non-test deps whose version could not be
+ * resolved — callers use this to emit incomplete-scan warnings.
  */
-export function parsePomContent(raw: string): { refs: PackageRef[]; versionlessCount: number } {
+export function parsePomContent(
+  raw: string,
+  managedVersions?: ReadonlyMap<string, string>
+): { refs: PackageRef[]; versionlessCount: number } {
   const refs: PackageRef[] = [];
   const seen = new Set<string>();
   let versionlessCount = 0;
+
+  // Strip <dependencyManagement> so its <dependency> entries are not treated
+  // as direct project dependencies (they are only version constraints).
+  const depsRaw = raw.replace(/<dependencyManagement>[\s\S]*?<\/dependencyManagement>/g, "");
 
   // Extract all <dependency> blocks (handles nested indentation)
   const depBlockRe = /<dependency>([\s\S]*?)<\/dependency>/g;
   let match: RegExpExecArray | null;
 
-  while ((match = depBlockRe.exec(raw)) !== null) {
+  while ((match = depBlockRe.exec(depsRaw)) !== null) {
     const block = match[1] ?? "";
 
     const groupId = extractXmlTag(block, "groupId");
     const artifactId = extractXmlTag(block, "artifactId");
-    const version = extractXmlTag(block, "version");
+    let version = extractXmlTag(block, "version");
     const scope = extractXmlTag(block, "scope");
 
     if (!groupId || !artifactId) continue;
@@ -111,10 +148,15 @@ export function parsePomContent(raw: string): { refs: PackageRef[]; versionlessC
     // Skip scopes we don't care about
     if (scope && SKIP_SCOPES.has(scope.toLowerCase())) continue;
 
-    // Skip if version is missing or is a range/property — but count them
+    // No inline version — try to resolve from managed versions map
     if (!version || version.startsWith("${")) {
-      versionlessCount++;
-      continue;
+      const resolved = managedVersions?.get(`${groupId}:${artifactId}`);
+      if (resolved) {
+        version = resolved;
+      } else {
+        versionlessCount++;
+        continue;
+      }
     }
     if (RANGE_RE.test(version)) continue;    // e.g. [1.0,2.0)
 
@@ -370,13 +412,17 @@ export function extractGradleSubprojects(raw: string): string[] {
 /**
  * Parse lockfile content by filename.
  * Returns { refs, versionlessCount } — versionlessCount is non-zero only for pom.xml
- * and libs.versions.toml (BOM-managed / no-version entries).
+ * and libs.versions.toml (BOM/parent-managed / no-version entries).
+ *
+ * managedVersions — optional map of "groupId:artifactId" → version for resolving
+ * versionless deps in pom.xml (from ancestor <dependencyManagement> blocks).
  */
 export function parseMavenLockfileContent(
   content: string,
-  filename: string
+  filename: string,
+  managedVersions?: ReadonlyMap<string, string>
 ): { refs: PackageRef[]; versionlessCount: number } {
-  if (filename === "pom.xml") return parsePomContent(content);
+  if (filename === "pom.xml") return parsePomContent(content, managedVersions);
   if (filename === "gradle.lockfile") return { refs: parseGradleLockfileContent(content), versionlessCount: 0 };
   if (filename === "build.gradle" || filename === "build.gradle.kts") {
     return { refs: parseBuildGradleContent(content), versionlessCount: 0 };
@@ -389,10 +435,13 @@ const MAX_MODULE_DEPTH = 5;
 
 // Internal recursive helper — carries raw versionlessCount rather than a
 // formatted string so the top-level call can produce one consolidated warning.
+// inheritedManagedVersions accumulates <dependencyManagement> entries from
+// ancestor pom.xml files so child modules can resolve versionless deps.
 async function parseMavenLockfileInternal(
   dir: string,
   seen: Set<string>,
-  depth: number
+  depth: number,
+  inheritedManagedVersions: Map<string, string>
 ): Promise<{ refs: PackageRef[]; versionlessCount: number }> {
   const filenames = await getMavenLockfilePaths(dir);
   if (filenames.length === 0) return { refs: [], versionlessCount: 0 };
@@ -401,15 +450,27 @@ async function parseMavenLockfileInternal(
   let versionlessCount = 0;
   const rawByFile = new Map<string, string>();
 
+  // Read all files first so we can extract managed versions before parsing deps.
   for (const filename of filenames) {
-    let raw: string;
     try {
-      raw = await readFile(join(dir, filename), "utf-8");
-    } catch {
-      continue;
+      rawByFile.set(filename, await readFile(join(dir, filename), "utf-8"));
+    } catch { /* not present */ }
+  }
+
+  // Build managed versions for this level: inherited + local pom.xml's
+  // <dependencyManagement> block (local entries take precedence).
+  const managedVersions = new Map(inheritedManagedVersions);
+  const pomRaw = rawByFile.get("pom.xml");
+  if (pomRaw) {
+    for (const [k, v] of extractManagedVersions(pomRaw)) {
+      managedVersions.set(k, v);
     }
-    rawByFile.set(filename, raw);
-    const parsed = parseMavenLockfileContent(raw, filename);
+  }
+
+  // Parse all files, forwarding managed versions so pom.xml can resolve
+  // deps that have no inline <version>.
+  for (const [filename, raw] of rawByFile) {
+    const parsed = parseMavenLockfileContent(raw, filename, managedVersions);
     versionlessCount += parsed.versionlessCount;
     for (const ref of parsed.refs) {
       const key = `${ref.name}@${ref.version}`;
@@ -422,7 +483,6 @@ async function parseMavenLockfileInternal(
 
   if (depth < MAX_MODULE_DEPTH) {
     const subPaths = new Set<string>();
-    const pomRaw = rawByFile.get("pom.xml");
     if (pomRaw) {
       for (const p of extractPomModules(pomRaw)) subPaths.add(p);
     }
@@ -435,7 +495,7 @@ async function parseMavenLockfileInternal(
 
     const subResults = await Promise.all(
       [...subPaths].map((subPath) =>
-        parseMavenLockfileInternal(join(dir, subPath), seen, depth + 1)
+        parseMavenLockfileInternal(join(dir, subPath), seen, depth + 1, managedVersions)
       )
     );
     for (const sub of subResults) {
@@ -459,7 +519,7 @@ export async function parseMavenLockfile(
   dir: string
 ): Promise<{ refs: PackageRef[]; lockfileDir: string; warnings?: string[] } | null> {
   const seen = new Set<string>();
-  const { refs, versionlessCount } = await parseMavenLockfileInternal(dir, seen, 0);
+  const { refs, versionlessCount } = await parseMavenLockfileInternal(dir, seen, 0, new Map());
 
   if (refs.length === 0 && versionlessCount === 0) return null;
 

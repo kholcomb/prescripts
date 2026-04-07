@@ -5,6 +5,7 @@ import {
   parseBuildGradleContent,
   parseMavenLockfileContent,
   parseVersionCatalogContent,
+  extractManagedVersions,
   extractPomModules,
   extractGradleSubprojects,
 } from "../src/lockfile/maven-parser.js";
@@ -113,6 +114,101 @@ describe("parsePomContent", () => {
     </dependencies></project>`;
     const { refs } = parsePomContent(pom);
     expect(refs).toHaveLength(1);
+  });
+});
+
+// ── extractManagedVersions + parent POM inheritance ───────────────────────────
+
+describe("extractManagedVersions", () => {
+  it("extracts versions from <dependencyManagement> block", () => {
+    const pom = `<project>
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>com.fasterxml.jackson.core</groupId>
+        <artifactId>jackson-databind</artifactId>
+        <version>2.14.0</version>
+      </dependency>
+      <dependency>
+        <groupId>org.springframework</groupId>
+        <artifactId>spring-core</artifactId>
+        <version>5.3.30</version>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+</project>`;
+    const map = extractManagedVersions(pom);
+    expect(map.get("com.fasterxml.jackson.core:jackson-databind")).toBe("2.14.0");
+    expect(map.get("org.springframework:spring-core")).toBe("5.3.30");
+  });
+
+  it("returns empty map when no <dependencyManagement> block", () => {
+    const pom = `<project><dependencies></dependencies></project>`;
+    expect(extractManagedVersions(pom).size).toBe(0);
+  });
+
+  it("skips property placeholder versions", () => {
+    const pom = `<project><dependencyManagement><dependencies>
+      <dependency><groupId>g</groupId><artifactId>a</artifactId><version>${"${spring.version}"}</version></dependency>
+    </dependencies></dependencyManagement></project>`;
+    expect(extractManagedVersions(pom).size).toBe(0);
+  });
+});
+
+describe("parsePomContent — parent POM version inheritance", () => {
+  it("does NOT include <dependencyManagement> entries as direct deps", () => {
+    const pom = `<project>
+  <dependencyManagement>
+    <dependencies>
+      <dependency><groupId>g</groupId><artifactId>managed</artifactId><version>1.0</version></dependency>
+    </dependencies>
+  </dependencyManagement>
+  <dependencies>
+    <dependency><groupId>g</groupId><artifactId>direct</artifactId><version>2.0</version></dependency>
+  </dependencies>
+</project>`;
+    const { refs } = parsePomContent(pom);
+    const names = refs.map((r) => r.name);
+    expect(names).toContain("g:direct");
+    expect(names).not.toContain("g:managed");
+  });
+
+  it("resolves versionless deps from passed managedVersions map", () => {
+    const pom = `<project><dependencies>
+      <dependency><groupId>com.example</groupId><artifactId>foo</artifactId></dependency>
+    </dependencies></project>`;
+    const managed = new Map([["com.example:foo", "3.0"]]);
+    const { refs, versionlessCount } = parsePomContent(pom, managed);
+    expect(refs).toHaveLength(1);
+    expect(refs[0]?.version).toBe("3.0");
+    expect(versionlessCount).toBe(0);
+  });
+
+  it("resolves from same-file <dependencyManagement> when passed as map", () => {
+    const pom = `<project>
+  <dependencyManagement>
+    <dependencies>
+      <dependency><groupId>g</groupId><artifactId>a</artifactId><version>4.0</version></dependency>
+    </dependencies>
+  </dependencyManagement>
+  <dependencies>
+    <dependency><groupId>g</groupId><artifactId>a</artifactId></dependency>
+  </dependencies>
+</project>`;
+    const managed = extractManagedVersions(pom);
+    const { refs, versionlessCount } = parsePomContent(pom, managed);
+    expect(refs).toHaveLength(1);
+    expect(refs[0]?.version).toBe("4.0");
+    expect(versionlessCount).toBe(0);
+  });
+
+  it("still counts truly unresolvable deps as versionless", () => {
+    const pom = `<project><dependencies>
+      <dependency><groupId>g</groupId><artifactId>external-bom</artifactId></dependency>
+    </dependencies></project>`;
+    const { refs, versionlessCount } = parsePomContent(pom, new Map());
+    expect(refs).toHaveLength(0);
+    expect(versionlessCount).toBe(1);
   });
 });
 
