@@ -18,7 +18,7 @@ import type { DiskCache } from "../cache/disk-cache.js";
 import type { EcosystemPlugin, ExtractionResult } from "./types.js";
 import { parsePipLockfile, hasPipLockfile, parsePipLockfileContent, findRequirementsFiles } from "../lockfile/pip-parser.js";
 import { extractPythonPackage } from "../extractor/python-tarball.js";
-import { fetchPyPIMeta, fetchPyPIProvenance, resolvePyPILatestVersion } from "../registry/pypi-client.js";
+import { fetchPyPIMeta, fetchPyPIProvenance, findPyPIFileByHash, resolvePyPILatestVersion } from "../registry/pypi-client.js";
 import { parsePyPIAttestation } from "../registry/pypi-attestation.js";
 import { extractPythonHooks, hasPythonHooks } from "../analyzer/python-hooks.js";
 import { fetchOsvAdvisories } from "../registry/osv-client.js";
@@ -133,12 +133,24 @@ export class PipPlugin implements EcosystemPlugin {
     let expectedIntegrity = ref.integrity;
 
     if (!tarballUrl) {
-      const meta = await fetchPyPIMeta(ref.name, ref.version);
-      if (!meta) {
-        throw new Error(`PyPI: no metadata for ${ref.name}@${ref.version}`);
+      // When the lockfile provides a hash, find the exact file on PyPI that
+      // matches it. This ensures we download the correct wheel variant (e.g.
+      // win32 vs amd64) so hash verification doesn't fail spuriously.
+      if (expectedIntegrity) {
+        const byHash = await findPyPIFileByHash(ref.name, ref.version, expectedIntegrity);
+        if (byHash) {
+          tarballUrl = byHash.url;
+        }
       }
-      tarballUrl = meta.tarballUrl;
-      expectedIntegrity = expectedIntegrity ?? meta.sha256;
+
+      if (!tarballUrl) {
+        const meta = await fetchPyPIMeta(ref.name, ref.version);
+        if (!meta) {
+          throw new Error(`PyPI: no metadata for ${ref.name}@${ref.version}`);
+        }
+        tarballUrl = meta.tarballUrl;
+        expectedIntegrity = expectedIntegrity ?? meta.sha256;
+      }
     }
 
     const cacheKey = expectedIntegrity ?? ref.version;
@@ -238,6 +250,7 @@ export class PipPlugin implements EcosystemPlugin {
       provenance,
       registryManifestScripts: null,
       registryIntegrity: meta.sha256,
+      registryIntegrityAll: meta.allSha256.length > 0 ? meta.allSha256 : null,
       registrySignatures: null,
     };
   }
@@ -250,20 +263,25 @@ export class PipPlugin implements EcosystemPlugin {
     _hooks: Record<string, string>
   ): Promise<Finding[]> {
     const findings: Finding[] = [];
-    const { registryIntegrity } = prov;
+    const { registryIntegrity, registryIntegrityAll } = prov;
 
-    // Lockfile poisoning — poetry.lock sha256 ≠ PyPI sha256
-    if (ref.integrity && registryIntegrity && ref.integrity !== registryIntegrity) {
+    // Lockfile poisoning — lockfile sha256 not found among any PyPI artifact for this version.
+    // Use the full set of hashes (all wheel variants, sdist) when available so that
+    // platform-specific wheels don't produce false positives.
+    const validHashes = new Set<string>(
+      registryIntegrityAll ?? (registryIntegrity ? [registryIntegrity] : [])
+    );
+    if (ref.integrity && validHashes.size > 0 && !validHashes.has(ref.integrity)) {
       findings.push({
         scriptHook: null,
         source: "lockfile vs. PyPI integrity",
         category: "lockfile_poisoning",
         severity: "critical",
         confidence: "high",
-        pattern: "lockfile sha256 does not match PyPI release sha256",
+        pattern: "lockfile sha256 does not match any PyPI release artifact",
         excerpt: {
           _warning: "UNTRUSTED THIRD-PARTY CONTENT",
-          lines: `lockfile: ${ref.integrity}\nPyPI:     ${registryIntegrity}`,
+          lines: `lockfile: ${ref.integrity}\nPyPI:     ${registryIntegrity ?? "(unavailable)"}`,
         },
       });
     }
