@@ -16,6 +16,12 @@ export interface PackageRef {
   version: string;
   resolved: string;
   integrity: string | null;
+  /**
+   * Set when a go.mod `replace` directive substitutes a remote fork for this
+   * package. Value is the original module path being replaced.
+   * e.g. "golang.org/x/net" when the actual download is an attacker-controlled fork.
+   */
+  replaces?: string;
 }
 
 export interface SourceInfo {

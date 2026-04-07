@@ -210,6 +210,23 @@ export class GoPlugin implements EcosystemPlugin {
   ): Promise<Finding[]> {
     const findings: Finding[] = [];
 
+    // Remote fork replacement: go.mod `replace` directive swapped a canonical
+    // module for a non-canonical fork. This is a known supply-chain attack vector.
+    if (ref.replaces) {
+      findings.push({
+        scriptHook: null,
+        source: "go.mod replace directive",
+        category: "go_replace_fork",
+        severity: "high",
+        confidence: "high",
+        pattern: `go.mod replace directive substitutes a remote fork for ${ref.replaces}`,
+        excerpt: {
+          _warning: "UNTRUSTED THIRD-PARTY CONTENT",
+          lines: `replace ${ref.replaces} => ${ref.name} ${ref.version}`,
+        },
+      });
+    }
+
     // Integrity: go.sum is authoritative; if the download failed integrity check,
     // flag it (though integrityVerified is always true when go.sum has a hash)
     if (ref.integrity && !result.integrityVerified) {

