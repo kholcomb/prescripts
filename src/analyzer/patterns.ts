@@ -38,7 +38,7 @@ export const PATTERN_REGISTRY: ReadonlyArray<PatternDef> = [
     severity: "high",
     description: "Network request in lifecycle script",
     // Python/Rust/Ruby/Go/Java files have dedicated patterns — exclude to prevent bleed
-    sourceExclude: /\.(py|rs|rb|gemspec|go|java)\b|pom\.xml|MANIFEST\.MF/,
+    sourceExclude: /\.(py|rs|rb|gemspec|go|java|targets|props)\b|pom\.xml|MANIFEST\.MF/,
     patterns: [
       /\bcurl\b/,
       /\bwget\b/,
@@ -54,7 +54,7 @@ export const PATTERN_REGISTRY: ReadonlyArray<PatternDef> = [
     description: "Encoding or dynamic code evaluation",
     // Python/Rust/Ruby/Go/Java files have dedicated patterns — exclude to prevent bleed.
     // Specifically prevents exec(f.read(), about) (Python version-loading idiom) from matching.
-    sourceExclude: /\.(py|rs|rb|gemspec|go|java)\b|pom\.xml|MANIFEST\.MF/,
+    sourceExclude: /\.(py|rs|rb|gemspec|go|java|targets|props)\b|pom\.xml|MANIFEST\.MF/,
     patterns: [
       /\beval\s*\(/,
       /\bFunction\s*\(/,
@@ -88,7 +88,7 @@ export const PATTERN_REGISTRY: ReadonlyArray<PatternDef> = [
     // Python/Rust/Ruby/Go/Java files have dedicated patterns.
     // Excludes Python to prevent: exec(f.read(), about) version-loading false positive.
     // Excludes Rust/Ruby/Go/Java to prevent JS patterns firing on their exec/spawn idioms.
-    sourceExclude: /\.(py|rs|rb|gemspec|go|java)\b|pom\.xml|MANIFEST\.MF/,
+    sourceExclude: /\.(py|rs|rb|gemspec|go|java|targets|props)\b|pom\.xml|MANIFEST\.MF/,
     patterns: [
       /\bchild_process\b/,
       /\bexecSync\s*\(/,
@@ -810,6 +810,33 @@ export const PATTERN_REGISTRY: ReadonlyArray<PatternDef> = [
     patterns: [
       /^Premain-Class:/m,
       /^Agent-Class:/m,
+    ],
+  },
+
+  // ── NuGet / MSBuild ───────────────────────────────────────────────────────
+  {
+    // high: <Exec Command="..."> in a NuGet package's .targets or .props file
+    // runs arbitrary shell commands during `dotnet build` / `msbuild`.
+    // This is the .NET equivalent of npm's postinstall — any consumer of this
+    // package executes these commands every time they build.
+    category: "nuget_msbuild_exec",
+    severity: "high",
+    description: "MSBuild <Exec> task in NuGet package — executes commands during dotnet build",
+    sourceMatch: /\.targets\b|\.props\b/,
+    patterns: [
+      /<Exec\b/i,                // any <Exec> task (catches Command=, WorkingDirectory=, etc.)
+    ],
+  },
+  {
+    // high: PowerShell script in tools/ of a NuGet package. Older nuget.exe
+    // workflows run install.ps1 / uninstall.ps1 automatically at install/uninstall.
+    // init.ps1 runs on every project open in Visual Studio.
+    category: "nuget_powershell",
+    severity: "high",
+    description: "PowerShell script in NuGet package tools/ — may auto-execute on install",
+    sourceMatch: /\.ps1\b/,
+    patterns: [
+      /.+/,   // any non-empty .ps1 file is a hook; pattern matches anything
     ],
   },
 ];

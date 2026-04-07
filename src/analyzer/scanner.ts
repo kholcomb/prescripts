@@ -53,6 +53,8 @@ const SOURCE_TYPE_KEYS = [
   "file.java",           // Java source files
   "pom.xml",             // Maven POM / Gradle build script — plugin configuration
   "MANIFEST.MF",         // Java JAR manifest file
+  "file.targets",        // MSBuild .targets / .props files (NuGet build hooks)
+  "file.ps1",            // PowerShell scripts (NuGet tools/ scripts)
 ] as const;
 
 type SourceTypeKey = typeof SOURCE_TYPE_KEYS[number];
@@ -73,6 +75,8 @@ function classifySource(source: string): SourceTypeKey {
   if (/\.java\b/.test(source))            return "file.java";
   if (/pom\.xml\b|\.gradle\b/.test(source)) return "pom.xml";
   if (/MANIFEST\.MF/.test(source))        return "MANIFEST.MF";
+  if (/\.targets\b|\.props\b/.test(source)) return "file.targets";
+  if (/\.ps1\b/.test(source))             return "file.ps1";
   return "postinstall script";
 }
 
