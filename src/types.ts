@@ -98,6 +98,14 @@ export interface ProvenanceFetchResult {
   /** dist.integrity from the registry manifest.
    *  Compare against the lockfile integrity field to detect lockfile poisoning. */
   registryIntegrity: string | null;
+  /**
+   * All valid integrity hashes for this version (all artifact variants).
+   * Populated by ecosystems that publish multiple platform-specific artifacts
+   * (e.g. Python wheels). When present, lockfile poisoning checks should use
+   * set membership against this field rather than equality against registryIntegrity,
+   * to avoid false positives from platform-specific wheel variant mismatches.
+   */
+  registryIntegrityAll?: string[] | null;
   /** dist.signatures from the registry manifest, for ECDSA verification. */
   registrySignatures: Array<{ keyid: string; sig: string }> | null;
 }
