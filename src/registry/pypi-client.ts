@@ -218,6 +218,13 @@ export interface PyPIVersionInfo {
    * upload time cannot be determined. Used for attestationRegressed detection.
    */
   previousVersion: string | null;
+  /**
+   * sha256 hashes (in "sha256:<hex>" format) for every file published under
+   * this version — all wheel variants, sdist, etc. Used to validate lockfile
+   * integrity against the full set of legitimate artifacts rather than a single
+   * selected file.
+   */
+  allSha256: string[];
 }
 
 interface PyPIFileEntry {
@@ -320,6 +327,31 @@ function findPreviousVersion(
 }
 
 /**
+ * Find the PyPI file entry for a specific package version whose sha256 hash
+ * matches `integrity` (in "sha256:<hex>" format).
+ *
+ * Returns the file's URL and confirmed sha256, or null if no match is found.
+ * A null result means the hash does not correspond to any file PyPI has ever
+ * published for this version — genuine grounds for a lockfile-poisoning alert.
+ */
+export async function findPyPIFileByHash(
+  name: string,
+  version: string,
+  integrity: string
+): Promise<{ url: string; sha256: string } | null> {
+  const base = getPyPIBase();
+  const url = `${base}/pypi/${encodeURIComponent(name)}/${encodeURIComponent(version)}/json`;
+  const data = await fetchPyPI(url);
+  if (!data) return null;
+
+  const hex = integrity.startsWith("sha256:") ? integrity.slice(7) : integrity;
+  const match = data.urls.find((f) => f.digests.sha256 === hex);
+  if (!match || !match.digests.sha256) return null;
+
+  return { url: match.url, sha256: `sha256:${match.digests.sha256}` };
+}
+
+/**
  * Fetch PyPI metadata for a specific package version.
  *
  * If version is "latest", fetches the latest release.
@@ -363,6 +395,10 @@ export async function fetchPyPIMeta(
     ? findPreviousVersion(releases, version, uploadTime)
     : null;
 
+  const allSha256 = files
+    .filter((f) => f.digests.sha256)
+    .map((f) => `sha256:${f.digests.sha256!}`);
+
   return {
     tarballUrl: best.url,
     sha256: best.digests.sha256 ? `sha256:${best.digests.sha256}` : null,
@@ -374,6 +410,7 @@ export async function fetchPyPIMeta(
     maintainer: verData.info.maintainer || null,
     author: verData.info.author || null,
     previousVersion,
+    allSha256,
   };
 }
 
