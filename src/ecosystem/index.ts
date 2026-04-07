@@ -21,6 +21,8 @@ import { npmPlugin } from "./npm.js";
 import { pipPlugin } from "./pip.js";
 import { cargoPlugin } from "./cargo.js";
 import { gemPlugin } from "./gem.js";
+import { goPlugin } from "./go.js";
+import { mavenPlugin } from "./maven.js";
 
 /** Lookup a plugin by packageManager name (for --pm CLI flag). */
 export function getPluginByName(pm: string): EcosystemPlugin | null {
@@ -31,6 +33,8 @@ export { npmPlugin } from "./npm.js";
 export { pipPlugin } from "./pip.js";
 export { cargoPlugin } from "./cargo.js";
 export { gemPlugin } from "./gem.js";
+export { goPlugin } from "./go.js";
+export { mavenPlugin } from "./maven.js";
 export type { EcosystemPlugin, ExtractionResult } from "./types.js";
 
 /**
@@ -42,6 +46,8 @@ export const ECOSYSTEM_PLUGINS: EcosystemPlugin[] = [
   pipPlugin,
   cargoPlugin,
   gemPlugin,
+  goPlugin,
+  mavenPlugin,
 ];
 
 /**

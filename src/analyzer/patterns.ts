@@ -37,8 +37,8 @@ export const PATTERN_REGISTRY: ReadonlyArray<PatternDef> = [
     category: "network",
     severity: "high",
     description: "Network request in lifecycle script",
-    // Python/Rust/Ruby files have dedicated patterns — exclude to prevent bleed
-    sourceExclude: /\.(py|rs|rb|gemspec)\b/,
+    // Python/Rust/Ruby/Go/Java files have dedicated patterns — exclude to prevent bleed
+    sourceExclude: /\.(py|rs|rb|gemspec|go|java)\b|pom\.xml|MANIFEST\.MF/,
     patterns: [
       /\bcurl\b/,
       /\bwget\b/,
@@ -52,9 +52,9 @@ export const PATTERN_REGISTRY: ReadonlyArray<PatternDef> = [
     category: "obfuscation",
     severity: "high",
     description: "Encoding or dynamic code evaluation",
-    // Python/Rust/Ruby files have dedicated patterns — exclude to prevent bleed.
+    // Python/Rust/Ruby/Go/Java files have dedicated patterns — exclude to prevent bleed.
     // Specifically prevents exec(f.read(), about) (Python version-loading idiom) from matching.
-    sourceExclude: /\.(py|rs|rb|gemspec)\b/,
+    sourceExclude: /\.(py|rs|rb|gemspec|go|java)\b|pom\.xml|MANIFEST\.MF/,
     patterns: [
       /\beval\s*\(/,
       /\bFunction\s*\(/,
@@ -85,10 +85,10 @@ export const PATTERN_REGISTRY: ReadonlyArray<PatternDef> = [
     category: "dynamic_exec",
     severity: "high",
     description: "Dynamic process execution",
-    // Python/Rust/Ruby files have dedicated patterns.
+    // Python/Rust/Ruby/Go/Java files have dedicated patterns.
     // Excludes Python to prevent: exec(f.read(), about) version-loading false positive.
-    // Excludes Rust/Ruby to prevent JS patterns firing on their exec/spawn idioms.
-    sourceExclude: /\.(py|rs|rb|gemspec)\b/,
+    // Excludes Rust/Ruby/Go/Java to prevent JS patterns firing on their exec/spawn idioms.
+    sourceExclude: /\.(py|rs|rb|gemspec|go|java)\b|pom\.xml|MANIFEST\.MF/,
     patterns: [
       /\bchild_process\b/,
       /\bexecSync\s*\(/,
@@ -675,6 +675,141 @@ export const PATTERN_REGISTRY: ReadonlyArray<PatternDef> = [
       // Any non-trivial content in rubygems_plugin.rb is suspicious.
       // Legitimate uses exist but are extremely rare.
       /\bGem\b/,  // Any gem API usage in this file is the intended trigger
+    ],
+  },
+
+  // ── Go-specific patterns ───────────────────────────────────────────────────
+
+  {
+    // high: os/exec.Command is the standard way to spawn processes in Go.
+    // In library or init() code this is almost always malicious.
+    // Legitimate use is in CLI tools, not library packages.
+    category: "go_exec",
+    severity: "high",
+    description: "Process execution in Go package (os/exec or syscall)",
+    sourceMatch: /\.go\b/,
+    patterns: [
+      /\bexec\.Command\s*\(/,          // os/exec.Command(...)
+      /\bexec\.CommandContext\s*\(/,   // context-aware variant
+      /\bsyscall\.Exec\s*\(/,         // low-level exec — replaces process
+      /\bsyscall\.ForkExec\s*\(/,     // fork+exec
+      /\bos\.StartProcess\s*\(/,      // os package process spawn
+    ],
+  },
+  {
+    // high: import "C" enables CGO, which compiles C code and links it into
+    // the Go binary. C code in CGO preambles runs at init time.
+    // Legitimate uses exist (system library wrappers) but are notable in deps.
+    category: "go_cgo",
+    severity: "high",
+    description: "CGO (C interop) in Go package — C code compiles and links at build time",
+    sourceMatch: /\.go\b/,
+    patterns: [
+      /\bimport\s+"C"/,               // CGO import declaration
+      /\/\/\s*#cgo\s/,                // CGO compiler flags in preamble
+    ],
+  },
+  {
+    // medium: unsafe package enables raw memory operations outside Go's safety model.
+    // In isolation this is low-risk; combined with network or exec it is a stronger signal.
+    category: "go_unsafe",
+    severity: "medium",
+    description: "Unsafe memory operations in Go package",
+    sourceMatch: /\.go\b/,
+    patterns: [
+      /\bunsafe\.Pointer\b/,
+      /\bunsafe\.Slice\b/,
+      /\breflect\.NewAt\s*\(/,        // circumvents type safety via reflection
+    ],
+  },
+  {
+    // medium: network calls in Go library code. The go_exec pattern covers the
+    // high-confidence case; this catches data exfiltration that doesn't spawn processes.
+    category: "go_network",
+    severity: "medium",
+    description: "Network call in Go package — check for data exfiltration",
+    sourceMatch: /\.go\b/,
+    patterns: [
+      /\bnet\.Dial\s*\(/,
+      /\bnet\.DialTCP\s*\(/,
+      /\bnet\.DialUDP\s*\(/,
+      /\bhttp\.Get\s*\(/,
+      /\bhttp\.Post\s*\(/,
+      /\bhttp\.NewRequest\s*\(/,
+    ],
+  },
+
+  // ── Java / Maven-specific patterns ────────────────────────────────────────
+
+  {
+    // high: Runtime.exec and ProcessBuilder are the primary Java shell execution APIs.
+    // In library code these are rarely legitimate; in build plugin configs they signal
+    // arbitrary command execution during the build lifecycle.
+    category: "java_exec",
+    severity: "high",
+    description: "Shell or process execution in Java code or Maven plugin configuration",
+    sourceMatch: /\.java\b|pom\.xml\b/,
+    patterns: [
+      /Runtime\.getRuntime\s*\(\s*\)\.exec\s*\(/,  // classic Runtime.exec
+      /new\s+ProcessBuilder\s*\(/,                  // ProcessBuilder
+      /\bProcess\s+\w+\s*=\s*Runtime/,              // Process p = Runtime...
+    ],
+  },
+  {
+    // high: dynamic class loading via reflection enables loading arbitrary code.
+    // Seen in deserialization gadget chains and supply-chain attacks.
+    category: "java_classload",
+    severity: "high",
+    description: "Dynamic class loading via reflection in Java",
+    sourceMatch: /\.java\b/,
+    patterns: [
+      /\bClass\.forName\s*\(/,
+      /\bdefineClass\s*\(/,
+      /\bClassLoader\b.*\bloadClass\s*\(/,
+      /\bURLClassLoader\s*\(/,        // loads classes from arbitrary URLs
+    ],
+  },
+  {
+    // medium: System.load/loadLibrary loads native .so/.dll at runtime.
+    // Can execute arbitrary native code. Legitimate for JNI wrappers.
+    category: "java_native",
+    severity: "medium",
+    description: "Native library loading in Java (JNI) — executes native code",
+    sourceMatch: /\.java\b/,
+    patterns: [
+      /\bSystem\.loadLibrary\s*\(/,
+      /\bSystem\.load\s*\(/,
+      /\bRuntime\.load\s*\(/,
+    ],
+  },
+  {
+    // high: exec-maven-plugin and antrun in a dependency's own pom.xml means
+    // those plugins will execute during that dependency's build. In a project's
+    // own pom.xml this signals that build-time arbitrary execution is configured.
+    category: "maven_exec_plugin",
+    severity: "high",
+    description: "Maven exec-maven-plugin or antrun — arbitrary command execution during build",
+    sourceMatch: /pom\.xml\b/,
+    patterns: [
+      /exec-maven-plugin/,
+      /maven-antrun-plugin/,
+      /groovy-maven-plugin/,
+      /gmaven-plugin/,
+      /<executable>/,                 // exec plugin target declaration
+      /<commandlineArgs>/,            // exec plugin args
+    ],
+  },
+  {
+    // medium: Java agent (Premain-Class or Agent-Class in MANIFEST.MF) allows
+    // bytecode instrumentation of the JVM. Agents can intercept any method call.
+    // Legitimate use: profilers, APM agents. In an unexpected dependency: suspicious.
+    category: "java_agent",
+    severity: "medium",
+    description: "JAR declares a Java agent (Premain-Class / Agent-Class) — can instrument JVM at startup",
+    sourceMatch: /MANIFEST\.MF/,
+    patterns: [
+      /^Premain-Class:/m,
+      /^Agent-Class:/m,
     ],
   },
 ];

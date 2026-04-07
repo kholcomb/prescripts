@@ -49,6 +49,10 @@ const SOURCE_TYPE_KEYS = [
   "file.gemspec",        // Ruby gemspec files
   "file.rb",             // Ruby source files
   "rubygems_plugin.rb",  // Ruby plugin hook (executes on every gem command)
+  "file.go",             // Go source files
+  "file.java",           // Java source files
+  "pom.xml",             // Maven POM / Gradle build script — plugin configuration
+  "MANIFEST.MF",         // Java JAR manifest file
 ] as const;
 
 type SourceTypeKey = typeof SOURCE_TYPE_KEYS[number];
@@ -65,6 +69,10 @@ function classifySource(source: string): SourceTypeKey {
   if (/\.rs\b/.test(source))              return "file.rs";
   if (/\.gemspec\b/.test(source))         return "file.gemspec";
   if (/\.rb\b/.test(source))             return "file.rb";
+  if (/\.go\b/.test(source))              return "file.go";
+  if (/\.java\b/.test(source))            return "file.java";
+  if (/pom\.xml\b|\.gradle\b/.test(source)) return "pom.xml";
+  if (/MANIFEST\.MF/.test(source))        return "MANIFEST.MF";
   return "postinstall script";
 }
 
