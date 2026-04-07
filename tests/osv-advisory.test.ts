@@ -6,10 +6,35 @@ function makeRef(name: string, version: string, integrity: string | null = null)
   return { name, version, resolved: "", integrity };
 }
 
-function mockFetch(body: unknown): void {
-  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
-    ok: true,
-    json: async () => body,
+const OSV_BATCH_URL = "https://api.osv.dev/v1/querybatch";
+const OSV_VULNS_BASE = "https://api.osv.dev/v1/vulns";
+
+/**
+ * Simulates the two-phase OSV API:
+ *   - POST to batch URL → returns stubs (id only)
+ *   - GET to /v1/vulns/{id} → returns full vuln object
+ *
+ * Accepts the same full-vuln structure that tests already define.
+ */
+function mockFetch(batchBody: { results: Array<{ vulns?: Array<{ id: string; [k: string]: unknown }> }> }): void {
+  const vulnById = new Map<string, unknown>();
+  for (const entry of batchBody.results) {
+    for (const vuln of entry.vulns ?? []) {
+      vulnById.set(vuln.id, vuln);
+    }
+  }
+  const stubResults = batchBody.results.map((r) => ({
+    vulns: (r.vulns ?? []).map((v) => ({ id: v.id })),
+  }));
+
+  vi.stubGlobal("fetch", vi.fn().mockImplementation(async (url: string) => {
+    if (url.startsWith(OSV_VULNS_BASE + "/")) {
+      const id = url.slice(OSV_VULNS_BASE.length + 1);
+      const vuln = vulnById.get(id);
+      return { ok: !!vuln, json: async () => vuln };
+    }
+    // Batch endpoint
+    return { ok: true, json: async () => ({ results: stubResults }) };
   }));
 }
 
@@ -30,6 +55,19 @@ const SEMVER_VULN = {
   database_specific: { severity: "MODERATE" },
 };
 
+// Go-style vuln: versions use v-prefix, OSV events use bare semver (no v)
+const GO_VULN = {
+  id: "GO-2024-1234",
+  summary: "Vulnerability in golang.org/x/net",
+  affected: [{
+    ranges: [{
+      type: "SEMVER",
+      events: [{ introduced: "0" }, { fixed: "0.38.0" }],
+    }],
+  }],
+  database_specific: { severity: "HIGH" },
+};
+
 // Vuln matched only by exact versions list
 const EXACT_VERSION_VULN = {
   id: "GHSA-abcd-1234-efgh",
@@ -37,6 +75,26 @@ const EXACT_VERSION_VULN = {
   affected: [{ versions: ["1.0.0", "1.0.1"] }],
   database_specific: { severity: "HIGH" },
 };
+
+describe("fetchOsvAdvisories — Go v-prefix version matching", () => {
+  it("matches a v-prefixed version within the vulnerable range", async () => {
+    mockFetch({ results: [{ vulns: [GO_VULN] }] });
+    const result = await fetchOsvAdvisories([makeRef("golang.org/x/net", "v0.37.0")], "Go");
+    expect(result.has("golang.org/x/net@v0.37.0")).toBe(true);
+  });
+
+  it("excludes a v-prefixed version at or after the fixed point", async () => {
+    mockFetch({ results: [{ vulns: [GO_VULN] }] });
+    const result = await fetchOsvAdvisories([makeRef("golang.org/x/net", "v0.38.0")], "Go");
+    expect(result.has("golang.org/x/net@v0.38.0")).toBe(false);
+  });
+
+  it("matches a v-prefixed version against introduced: 0 (from the beginning)", async () => {
+    mockFetch({ results: [{ vulns: [GO_VULN] }] });
+    const result = await fetchOsvAdvisories([makeRef("golang.org/x/net", "v0.1.0")], "Go");
+    expect(result.has("golang.org/x/net@v0.1.0")).toBe(true);
+  });
+});
 
 describe("fetchOsvAdvisories — SEMVER range matching", () => {
   it("matches a version within the vulnerable range", async () => {

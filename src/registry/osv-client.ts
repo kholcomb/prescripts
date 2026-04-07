@@ -1,6 +1,8 @@
 import type { AdvisoryMatch, PackageRef, Severity } from "../types.js";
 
 const OSV_BATCH_URL = "https://api.osv.dev/v1/querybatch";
+const OSV_VULNS_BASE = "https://api.osv.dev/v1/vulns";
+const OSV_BATCH_CONCURRENCY = 20;
 
 interface OsvEvent {
   introduced?: string;
@@ -26,15 +28,21 @@ interface OsvVuln {
   database_specific?: { severity?: string };
 }
 
+// /v1/querybatch now returns only id stubs — full data requires individual GETs
+interface OsvVulnStub {
+  id: string;
+  modified?: string;
+}
+
 interface OsvBatchResponse {
-  results: Array<{ vulns?: OsvVuln[] }>;
+  results: Array<{ vulns?: OsvVulnStub[] }>;
 }
 
 // ── Semver helpers ─────────────────────────────────────────────────────────
 
 function parseSemver(v: string): [number, number, number] | null {
   if (v === "0" || v === "") return [0, 0, 0];
-  const m = v.trim().match(/^(\d+)\.(\d+)\.(\d+)/);
+  const m = v.trim().match(/^v?(\d+)\.(\d+)\.(\d+)/);
   if (!m) return null;
   return [parseInt(m[1]!, 10), parseInt(m[2]!, 10), parseInt(m[3]!, 10)];
 }
@@ -133,8 +141,28 @@ function findPatchedVersion(vuln: OsvVuln): string | null {
 // ── Public API ─────────────────────────────────────────────────────────────
 
 /**
+ * Fetch full vulnerability details for a single OSV ID.
+ * Returns null on any failure (404, timeout, parse error).
+ */
+async function fetchVulnDetails(id: string): Promise<OsvVuln | null> {
+  try {
+    const res = await fetch(`${OSV_VULNS_BASE}/${id}`, {
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as OsvVuln;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Queries the OSV batch API for known vulnerabilities in the given package refs.
  * `ecosystem` must match OSV's naming convention: "PyPI", "crates.io", "RubyGems".
+ *
+ * Uses a two-phase approach:
+ *   1. POST /v1/querybatch → get vuln ID stubs per package
+ *   2. GET /v1/vulns/{id} in parallel → get full affected-range data
  *
  * Returns a map keyed by "name@version" (and "name@integrity" when available),
  * matching the same contract as the npm advisory client.
@@ -155,25 +183,52 @@ export async function fetchOsvAdvisories(
   }));
 
   try {
-    const res = await fetch(OSV_BATCH_URL, {
+    // Phase 1: batch query for vuln ID stubs
+    const batchRes = await fetch(OSV_BATCH_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ queries }),
       signal: AbortSignal.timeout(30_000),
     });
 
-    if (!res.ok) return result;
+    if (!batchRes.ok) return result;
 
-    const data = (await res.json()) as OsvBatchResponse;
+    const batchData = (await batchRes.json()) as OsvBatchResponse;
 
+    // Collect unique IDs across all results
+    const allIds = new Set<string>();
+    for (const entry of batchData.results) {
+      for (const stub of entry.vulns ?? []) {
+        allIds.add(stub.id);
+      }
+    }
+    if (allIds.size === 0) return result;
+
+    // Phase 2: fetch full vuln details in parallel (bounded concurrency)
+    const ids = [...allIds];
+    const vulnMap = new Map<string, OsvVuln>();
+
+    for (let i = 0; i < ids.length; i += OSV_BATCH_CONCURRENCY) {
+      const chunk = ids.slice(i, i + OSV_BATCH_CONCURRENCY);
+      const settled = await Promise.all(chunk.map(fetchVulnDetails));
+      for (const vuln of settled) {
+        if (vuln) vulnMap.set(vuln.id, vuln);
+      }
+    }
+
+    // Match full data against each ref
     for (let i = 0; i < queryable.length; i++) {
       const ref = queryable[i]!;
-      const vulns = data.results[i]?.vulns ?? [];
-      if (vulns.length === 0) continue;
+      const stubs = batchData.results[i]?.vulns ?? [];
+      if (stubs.length === 0) continue;
 
-      // OSV returns all vulns for the package; filter to those that actually
-      // cover this specific version via range or exact-version matching.
-      const matching = vulns.filter((v) => isAffected(ref.version, v));
+      const matching: OsvVuln[] = [];
+      for (const stub of stubs) {
+        const vuln = vulnMap.get(stub.id);
+        if (vuln && isAffected(ref.version, vuln)) {
+          matching.push(vuln);
+        }
+      }
       if (matching.length === 0) continue;
 
       const mapped: AdvisoryMatch[] = matching.map((v) => ({
