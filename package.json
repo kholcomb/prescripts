@@ -28,7 +28,7 @@
     "p-limit": "7.3.0",
     "p-retry": "8.0.0",
     "simple-git": "3.35.2",
-    "tar": "7.5.13",
+    "tar": "7.5.16",
     "yauzl": "^3.3.0"
   },
   "devDependencies": {
